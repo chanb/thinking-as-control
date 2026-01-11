@@ -252,8 +252,8 @@ class PlayGridWorldEnv(gym.Env):
             act = 4
         else:
             act = np.random.choice([5, 6])
-        # Re-sample goal with probability 0.25
-        act = np.random.choice([act, 5, 6], p=[0.75, 0.125, 0.125])
+        # Re-sample goal with probability 0.2
+        act = np.random.choice([act, 5, 6], p=[0.8, 0.1, 0.1])
         return act
 
 

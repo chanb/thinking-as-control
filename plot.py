@@ -39,15 +39,13 @@ plot_actions = args.plot_actions
 
 
 # Optional: set a set of labels to use for plot
-# base_to_label = {
-#     'pretrained': 'Pretrained-Think',
-#     'pretrained_mask': 'Pretrained-NoThink',
-#     'scratch': 'Scratch-Think',
-#     'scratch_mask': 'Scratch-NoThink'
-# }
-base_to_label = {}
-
-# names = ["Pretrained-Think", "Pretrained-NoThink", "Scratch-NoThink", "Scratch-Think"][:len(bases)]
+base_to_label = {
+    'pretrained-think': 'Pretrained-Think',
+    'pretrained-nothink': 'Pretrained-NoThink',
+    'scratch-think': 'Scratch-Think',
+    'scratch-nothink': 'Scratch-NoThink'
+}
+# base_to_label = {}
 
 data_list = []
 

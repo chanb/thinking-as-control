@@ -62,7 +62,7 @@ def parse_args():
 
 
 def train_sl():
-    env = PlayGridWorldEnv(wrong_goals=True)
+    env = PlayGridWorldEnv()
     device = torch.device("cpu")
     policy = TransformerPolicy().to(device)
     optimizer = optim.Adam(policy.parameters(), lr=1e-4)
@@ -171,7 +171,7 @@ def evaluate_pretrained_agent(
             state_seq.append(torch.tensor(obs["position"]))
 
     print("Success rate:", total_reward / num_episodes)
-    print(action_counts)
+    print(action_counts / np.sum(action_counts))
 
 
 if __name__ == "__main__":
