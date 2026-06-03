@@ -81,6 +81,12 @@ class TransformerPolicy(nn.Module):
         input_seq = input_seq.transpose(0, 1)
         src_key_padding = src_key_padding.transpose(0, 1)
 
+        # NO GRAD ON TF
+        # with torch.no_grad():
+        #     x = self.transformer(
+        #         input_seq, mask=causal_mask, src_key_padding_mask=src_key_padding
+        #     )
+
         x = self.transformer(
             input_seq, mask=causal_mask, src_key_padding_mask=src_key_padding
         )

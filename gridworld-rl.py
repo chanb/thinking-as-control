@@ -110,21 +110,26 @@ def train_rl(output_file_base, seed, model_path, use_action_mask=False, save_pat
             values = []
             timestep = 0
 
+            curr_state = torch.tensor(obs["position"], device=device)[None]
+            curr_act = torch.tensor(obs["letter"], device=device)[None]
             while not done:
-
-                sseq = torch.stack(state_seq).unsqueeze(0)
-                aseq = torch.stack(action_seq).unsqueeze(0)
+                sseq = torch.cat((curr_state, torch.stack(state_seq)), dim=0).unsqueeze(0)
+                aseq = torch.cat((curr_act, torch.stack(action_seq)), dim=0).unsqueeze(0)
 
                 with torch.no_grad():
                     logits, value = policy(sseq, aseq, action_mask=action_mask)
-                    probs = F.softmax(logits, dim=-1)[0][-1]
+                    probs = F.softmax(logits, dim=-1)[0][0]
                     dist = Categorical(probs)
                     action = dist.sample()
                     log_probs.append(dist.log_prob(action).item())
-                    values.append(value[0][-1].item())
+                    values.append(value[0][0].item())
                     action_counts[action.item()] += 1
 
                 next_obs, reward, done, _ = env.step(action)
+
+                if action < 5 and action > 0:
+                    curr_state = torch.tensor(next_obs["position"], device=device)[None]
+                    curr_act = torch.tensor(next_obs["letter"], device=device)[None]
 
                 total_reward += reward
                 rew_seq.append(reward)
@@ -164,8 +169,38 @@ def train_rl(output_file_base, seed, model_path, use_action_mask=False, save_pat
             value_mean = 0.0
 
             for states, acts, targets, returns, advs, old_logprobs, mask in loader:
+                # x: (B, S, D)
+                B, S, D = states.shape
+                # Repeat each sequence S times: (B, S, S, D)
+                seqs = states[:, None].expand(B, S, S, D)
+                # Extract the prepended elements x[:, s]: (B, S, D)
+                heads = states
+                # Add sequence dimension: (B, S, 1, D)
+                heads = heads.unsqueeze(2)
+                # Concatenate: (B, S, S + 1, D)
+                states = torch.cat([heads, seqs], dim=2)
+                # Flatten first two dimensions: (B * S, S + 1, D)
+                states = states.reshape(B * S, S + 1, D)
 
-                logits, values = policy(states, acts, mask, action_mask=action_mask)
+                # x: (B, S)
+                B, S = acts.shape
+                # (B, S, 1): x[s] for every s
+                prefix = acts.unsqueeze(-1)
+                # (B, S, S): repeat full sequence for every s
+                full = acts.unsqueeze(1).expand(B, S, S)
+                # (B, S, S+1)
+                out = torch.cat([prefix, full], dim=-1)
+                # (B*S, S+1)
+                acts = out.reshape(B * S, S + 1)
+
+                advs = advs.reshape(-1)
+                returns = returns.reshape(-1)
+                targets = targets.reshape(-1)
+                old_logprobs = old_logprobs.reshape(-1)
+
+                logits, values = policy(states, acts, action_mask=action_mask)
+                logits = logits[:, 0]
+                values = values[:, 0]
                 dist = Categorical(logits=logits)
                 logprobs = dist.log_prob(targets)
 
@@ -175,6 +210,7 @@ def train_rl(output_file_base, seed, model_path, use_action_mask=False, save_pat
                 binary_mask = mask.to(
                     dtype=torch.uint8
                 )  # Or torch.int, torch.long, etc.
+                binary_mask = binary_mask.reshape(-1)
 
                 if USE_PPO:
                     ratio = torch.exp(logprobs - old_logprobs)
@@ -235,7 +271,7 @@ def evaluate_agent(env, agent):
 
             with torch.no_grad():
                 logits, _ = agent(sseq, aseq)
-                probs = F.softmax(logits, dim=-1)[0][-1]
+                probs = F.softmax(logits, dim=-1)[0][0]
                 dist = Categorical(probs)
                 action = dist.sample()
 
