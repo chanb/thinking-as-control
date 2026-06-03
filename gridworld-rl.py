@@ -89,8 +89,8 @@ def train_rl(output_file_base, seed, model_path, n_thought_acts=3, use_action_ma
     if use_action_mask:
         action_mask = torch.tensor([0, 1, 1, 1, 1] + [0] * n_thought_acts)
 
-    vf_and_policy_optimizer = optim.Adam(policy.parameters(), lr=1e-5, weight_decay=0.0)
-    vf_optimizer = optim.Adam(policy.parameters(), lr=1e-5, weight_decay=0.0)
+    vf_and_policy_optimizer = optim.Adam(policy.parameters(), lr=1e-3, weight_decay=0.0)
+    vf_optimizer = optim.Adam(policy.parameters(), lr=1e-3, weight_decay=0.0)
 
     USE_PPO = False
     num_episodes = 200
