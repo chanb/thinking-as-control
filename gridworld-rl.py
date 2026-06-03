@@ -13,7 +13,7 @@ from torch.utils.data import Dataset, DataLoader
 from matplotlib import pyplot as plt
 
 from data_utils import rl_collate_fn, RLDataset, compute_returns_and_advantages
-from envs import TwoStageGridWorldEnv
+from envs import GridWorldEnv
 from policies import TransformerPolicy
 
 
@@ -34,6 +34,13 @@ def parse_args():
         type=str,
         default=None,
         help="Path to save the trained model file (.pt or .pth)",
+    )
+
+    parser.add_argument(
+        "--n_thought_acts",
+        type=int,
+        default=3,
+        help='Number of thought actions'
     )
 
     parser.add_argument(
@@ -60,8 +67,8 @@ def parse_args():
     return parser.parse_args()
 
 
-def train_rl(output_file_base, seed, model_path, use_action_mask=False, save_path=None):
-    env = TwoStageGridWorldEnv()
+def train_rl(output_file_base, seed, model_path, n_thought_acts=3, use_action_mask=False, save_path=None):
+    env = GridWorldEnv(n_thought_acts=n_thought_acts)
     device = torch.device("cpu")
 
     # from_scratch = False
@@ -78,9 +85,9 @@ def train_rl(output_file_base, seed, model_path, use_action_mask=False, save_pat
     torch.manual_seed(np.random.randint(1e5))
     random.seed(np.random.randint(1e5))
 
-    action_mask = None
+    action_mask = torch.tensor([0, 1, 1, 1, 1] + [1] * n_thought_acts)
     if use_action_mask:
-        action_mask = torch.tensor([0, 1, 1, 1, 1, 0, 0, 0])
+        action_mask = torch.tensor([0, 1, 1, 1, 1] + [0] * n_thought_acts)
 
     vf_and_policy_optimizer = optim.Adam(policy.parameters(), lr=1e-5, weight_decay=0.0)
     vf_optimizer = optim.Adam(policy.parameters(), lr=1e-5, weight_decay=0.0)
@@ -104,21 +111,26 @@ def train_rl(output_file_base, seed, model_path, use_action_mask=False, save_pat
             done = False
 
             state_seq = [torch.tensor(obs["position"], device=device)]
-            action_seq = [torch.tensor(obs["letter"], device=device)]
+            action_seq = [torch.tensor(0, device=device)]
             rew_seq = []
             log_probs = []
             values = []
             timestep = 0
 
             curr_state = torch.tensor(obs["position"], device=device)[None]
-            curr_act = torch.tensor(obs["letter"], device=device)[None]
+            curr_act = torch.tensor(0, device=device)[None]
             while not done:
                 sseq = torch.cat((curr_state, torch.stack(state_seq)), dim=0).unsqueeze(0)
                 aseq = torch.cat((curr_act, torch.stack(action_seq)), dim=0).unsqueeze(0)
 
+                # print('--')
+                # print(sseq)
+                # print(aseq)
+
                 with torch.no_grad():
                     logits, value = policy(sseq, aseq, action_mask=action_mask)
                     probs = F.softmax(logits, dim=-1)[0][0]
+                    # print(probs)
                     dist = Categorical(probs)
                     action = dist.sample()
                     log_probs.append(dist.log_prob(action).item())
@@ -129,7 +141,7 @@ def train_rl(output_file_base, seed, model_path, use_action_mask=False, save_pat
 
                 if action < 5 and action > 0:
                     curr_state = torch.tensor(next_obs["position"], device=device)[None]
-                    curr_act = torch.tensor(next_obs["letter"], device=device)[None]
+                    curr_act = torch.tensor(action, device=device)[None]
 
                 total_reward += reward
                 rew_seq.append(reward)
@@ -143,6 +155,7 @@ def train_rl(output_file_base, seed, model_path, use_action_mask=False, save_pat
             log_prob_seq = torch.tensor(log_probs)
             returns, advs = compute_returns_and_advantages(rew_seq, values)
             episodes.append((sseq, aseq, returns, advs, log_prob_seq))
+            # assert episode < 2
 
         frac_thinking_actions[itr] = action_counts[5:].sum() / action_counts.sum()
         rewards[itr] = total_reward / num_episodes
@@ -253,7 +266,11 @@ def train_rl(output_file_base, seed, model_path, use_action_mask=False, save_pat
     return env, policy
 
 
-def evaluate_agent(env, agent):
+def evaluate_agent(env, agent, n_thought_acts, use_action_mask):
+
+    action_mask = torch.tensor([0, 1, 1, 1, 1] + [1] * n_thought_acts)
+    if use_action_mask:
+        action_mask = torch.tensor([0, 1, 1, 1, 1] + [0] * n_thought_acts)
 
     num_episodes = 100
     total_reward = 0.0
@@ -263,19 +280,25 @@ def evaluate_agent(env, agent):
         done = False
 
         state_seq = [torch.tensor(obs["position"])]
-        action_seq = [torch.tensor(obs["letter"])]
+        action_seq = [torch.tensor(0)]
 
+        curr_state = torch.tensor(obs["position"])[None]
+        curr_act = torch.tensor(0)[None]
         while not done:
-            sseq = torch.stack(state_seq).unsqueeze(0)
-            aseq = torch.stack(action_seq).unsqueeze(0)
+            sseq = torch.cat((curr_state, torch.stack(state_seq)), dim=0).unsqueeze(0)
+            aseq = torch.cat((curr_act, torch.stack(action_seq)), dim=0).unsqueeze(0)
 
             with torch.no_grad():
-                logits, _ = agent(sseq, aseq)
+                logits, _ = agent(sseq, aseq, action_mask=action_mask)
                 probs = F.softmax(logits, dim=-1)[0][0]
                 dist = Categorical(probs)
                 action = dist.sample()
 
             next_obs, reward, done, _ = env.step(action)
+
+            if action < 5 and action > 0:
+                curr_state = torch.tensor(next_obs["position"])[None]
+                curr_act = torch.tensor(action)[None]
             total_reward += reward
 
             action_seq.append(action)
@@ -293,8 +316,9 @@ if __name__ == "__main__":
     results_file = args.output_file
     use_action_mask = args.mask_thinking
     save_path = args.model_save_path
+    n_thought_acts = args.n_thought_acts
 
     env2, agent = train_rl(
-        results_file, seed, model_path, use_action_mask, save_path=save_path
+        results_file, seed, model_path, n_thought_acts, use_action_mask, save_path=save_path
     )
-    evaluate_agent(env2, agent)
+    evaluate_agent(env2, agent, n_thought_acts, use_action_mask)

@@ -34,7 +34,7 @@ class TransformerPolicy(nn.Module):
         super().__init__()
         self.d_model = d_model
         vocab_size = 7 + 1  # 4 movement actions, 3 thinking actions, 1 padding action
-        self.state_embedding = nn.Linear(2, d_model)
+        self.state_embedding = nn.Linear(3, d_model)
         self.action_embedding = nn.Embedding(vocab_size, d_model, padding_idx=0)
         self.pos_encoder = PositionalEncoding(2 * d_model, max_len=max_len)
 

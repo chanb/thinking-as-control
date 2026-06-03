@@ -13,7 +13,7 @@ MAX_STEPS = (GRID_SIZE // 2) * 2 + 2 * GRID_SIZE + 6
 
 
 class GridWorldEnv(gym.Env):
-    def __init__(self, n_goals=2):
+    def __init__(self, n_goals=2, n_thought_acts=3):
         super(GridWorldEnv, self).__init__()
         self.grid_size = GRID_SIZE
         self.max_steps = MAX_STEPS
@@ -24,7 +24,7 @@ class GridWorldEnv(gym.Env):
         if n_goals > 1:
             self.letter_goals[6] = (1, 1)  # 'C'
         self.letters = list(self.letter_goals.keys())
-        self.action_meanings = ["UP", "DOWN", "LEFT", "RIGHT", "A", "B", "C"]
+        self.action_meanings = ["UP", "DOWN", "LEFT", "RIGHT"] + [f"THOUGHT_{ii}" for ii in range(n_thought_acts)]
         self.action_space = gym.spaces.Discrete(len(self.action_meanings))
         self.observation_space = gym.spaces.Dict(
             {
@@ -51,7 +51,8 @@ class GridWorldEnv(gym.Env):
         return self._get_obs()
 
     def _get_obs(self):
-        return {"letter": self.letter, "position": self.agent_pos.copy()}
+        # return {"letter": self.letter, "position": self.agent_pos.copy()}
+        return {"position": np.concatenate((self.agent_pos.copy(), [self.letter]))}
 
     def step(self, action):
         self.steps += 1
