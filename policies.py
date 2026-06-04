@@ -30,10 +30,10 @@ def generate_causal_mask(seq_len, device="cpu"):
 
 
 class TransformerPolicy(nn.Module):
-    def __init__(self, d_model=128, nhead=4, num_layers=2, max_len=50):
+    def __init__(self, n_thought_acts=2, d_model=128, nhead=4, num_layers=2, max_len=50):
         super().__init__()
         self.d_model = d_model
-        vocab_size = 7 + 1  # 4 movement actions, 3 thinking actions, 1 padding action
+        vocab_size = 4 + 1 + n_thought_acts  # 4 movement actions, 1 padding action, and thoughta ctions
         self.state_embedding = nn.Linear(3, d_model)
         self.action_embedding = nn.Embedding(vocab_size, d_model, padding_idx=0)
         self.pos_encoder = PositionalEncoding(2 * d_model, max_len=max_len)

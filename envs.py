@@ -9,7 +9,8 @@ import gym
 # MAX_STEPS = 20
 
 GRID_SIZE = 5
-MAX_STEPS = (GRID_SIZE // 2) * 2 + 2 * GRID_SIZE + 6
+# MAX_STEPS = (GRID_SIZE // 2) * 2 + 2 * GRID_SIZE + 6
+MAX_STEPS = GRID_SIZE * 2 * 10
 
 
 class GridWorldEnv(gym.Env):

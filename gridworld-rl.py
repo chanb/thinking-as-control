@@ -79,7 +79,7 @@ def train_rl(output_file_base, seed, model_path, n_thought_acts=3, use_action_ma
     if model_path is not None:
         policy = torch.load(model_path, weights_only=False)
     else:
-        policy = TransformerPolicy().to(device)
+        policy = TransformerPolicy(n_thought_acts=n_thought_acts, max_len=128).to(device)
 
     np.random.seed(seed)
     torch.manual_seed(np.random.randint(1e5))
@@ -89,7 +89,7 @@ def train_rl(output_file_base, seed, model_path, n_thought_acts=3, use_action_ma
     if use_action_mask:
         action_mask = torch.tensor([0, 1, 1, 1, 1] + [0] * n_thought_acts)
 
-    vf_and_policy_optimizer = optim.Adam(policy.parameters(), lr=1e-3, weight_decay=0.0)
+    vf_and_policy_optimizer = optim.Adam(policy.parameters(), lr=1e-3, weight_decay=0.02)
     vf_optimizer = optim.Adam(policy.parameters(), lr=1e-3, weight_decay=0.0)
 
     USE_PPO = False
@@ -103,7 +103,7 @@ def train_rl(output_file_base, seed, model_path, n_thought_acts=3, use_action_ma
 
         episodes = []
         total_reward = 0.0
-        action_counts = np.zeros(8)
+        action_counts = np.zeros(5 + n_thought_acts)
 
         # 1. Collect data
         for episode in range(num_episodes):
