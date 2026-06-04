@@ -22,7 +22,7 @@ class NextTokenDataset:
     def __getitem__(self, idx):
         return self.samples[idx]
 
-    def clear():
+    def clear(self):
         self.samples = []
 
 
@@ -50,7 +50,7 @@ class RLDataset:
     def __getitem__(self, idx):
         return self.samples[idx]
 
-    def clear():
+    def clear(self):
         self.samples = []
 
 

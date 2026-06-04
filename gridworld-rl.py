@@ -67,7 +67,16 @@ def parse_args():
     return parser.parse_args()
 
 
-def train_rl(output_file_base, seed, model_path, n_thought_acts=3, use_action_mask=False, save_path=None):
+# TODO: Add action masking for fixed thought steps.
+def train_rl(
+    output_file_base,
+    seed,
+    model_path,
+    n_thought_acts=3,
+    use_action_mask=False,
+    save_path=None,
+):
+    fixed_thought_len = -1 # dynamic
     env = GridWorldEnv(
         n_thought_acts=n_thought_acts,
         n_goals=2,
