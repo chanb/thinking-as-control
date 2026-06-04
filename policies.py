@@ -34,7 +34,9 @@ class TransformerPolicy(nn.Module):
         super().__init__()
         self.d_model = d_model
         vocab_size = 4 + 1 + n_thought_acts  # 4 movement actions, 1 padding action, and thoughta ctions
-        self.state_embedding = nn.Linear(3, d_model)
+        self.x_embedding = nn.Embedding(6, d_model // 4, padding_idx=0)
+        self.y_embedding = nn.Embedding(6, d_model // 4, padding_idx=0)
+        self.goal_embedding = nn.Embedding(3, d_model // 2, padding_idx=0)
         self.action_embedding = nn.Embedding(vocab_size, d_model, padding_idx=0)
         self.pos_encoder = PositionalEncoding(2 * d_model, max_len=max_len)
 
@@ -62,7 +64,11 @@ class TransformerPolicy(nn.Module):
                 [[True for _ in range(seq_len)] for _ in range(batch_size)]
             )
 
-        state_embed = self.state_embedding(state_seq.float())  # [B, seq, D]
+        # state_embed = self.state_embedding(state_seq.float())  # [B, seq, D]
+        x_embed = self.x_embedding(state_seq[..., 0])
+        y_embed = self.y_embedding(state_seq[..., 1])
+        goal_embed = self.goal_embedding(state_seq[..., 2])
+        state_embed = torch.cat((x_embed, y_embed, goal_embed), dim=-1)
         action_embed = self.action_embedding(action_seq)
 
         interleaved = torch.zeros(

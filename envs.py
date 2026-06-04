@@ -21,10 +21,10 @@ class GridWorldEnv(gym.Env):
         self.max_steps = MAX_STEPS
         self.deterministic_start = deterministic_start
         self.letter_goals = {
-            5: (self.grid_size, self.grid_size),  # 'A'
+            1: (self.grid_size, self.grid_size),  # 'A'
         }
         if n_goals > 1:
-            self.letter_goals[6] = (1, 1)  # 'C'
+            self.letter_goals[2] = (1, 1)  # 'C'
         self.letters = list(self.letter_goals.keys())
         self.action_meanings = ["UP", "DOWN", "LEFT", "RIGHT"] + [f"THOUGHT_{ii}" for ii in range(n_thought_acts)]
         self.action_space = gym.spaces.Discrete(len(self.action_meanings))
