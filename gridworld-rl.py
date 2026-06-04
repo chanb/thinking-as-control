@@ -93,9 +93,9 @@ def train_rl(output_file_base, seed, model_path, n_thought_acts=3, use_action_ma
     vf_optimizer = optim.Adam(policy.parameters(), lr=1e-3, weight_decay=0.0)
 
     USE_PPO = False
-    num_episodes = 200
-    num_iterations = 100
-    vf_burn_in_iters = 1
+    num_episodes = 10
+    num_iterations = 5000
+    vf_burn_in_iters = 10
     rewards = np.zeros(num_iterations)
     frac_thinking_actions = np.zeros(num_iterations)
 
