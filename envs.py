@@ -14,12 +14,12 @@ MAX_STEPS = GRID_SIZE * 2 * 10
 
 
 class GridWorldEnv(gym.Env):
-    def __init__(self, n_goals=2, n_thought_acts=3, seed=42):
+    def __init__(self, n_goals=2, deterministic_start=False, n_thought_acts=3, seed=42):
         super(GridWorldEnv, self).__init__()
         self.rng = np.random.RandomState(seed)
         self.grid_size = GRID_SIZE
         self.max_steps = MAX_STEPS
-        self.deterministic_start = False
+        self.deterministic_start = deterministic_start
         self.letter_goals = {
             5: (self.grid_size, self.grid_size),  # 'A'
         }

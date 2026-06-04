@@ -68,7 +68,11 @@ def parse_args():
 
 
 def train_rl(output_file_base, seed, model_path, n_thought_acts=3, use_action_mask=False, save_path=None):
-    env = GridWorldEnv(n_thought_acts=n_thought_acts)
+    env = GridWorldEnv(
+        n_thought_acts=n_thought_acts,
+        n_goals=2,
+        deterministic_start=True,
+    )
     device = torch.device("cpu")
 
     # from_scratch = False
@@ -82,8 +86,8 @@ def train_rl(output_file_base, seed, model_path, n_thought_acts=3, use_action_ma
         policy = TransformerPolicy(n_thought_acts=n_thought_acts, max_len=128).to(device)
 
     np.random.seed(seed)
-    torch.manual_seed(np.random.randint(1e5))
-    random.seed(np.random.randint(1e5))
+    torch.manual_seed(seed)
+    random.seed(seed)
 
     action_mask = torch.tensor([0, 1, 1, 1, 1] + [1] * n_thought_acts)
     if use_action_mask:
@@ -177,8 +181,6 @@ def train_rl(output_file_base, seed, model_path, n_thought_acts=3, use_action_ma
 
             for states, acts, targets, returns, advs, old_logprobs, mask in loader:
                 logits, values = policy(states, acts, action_mask=action_mask)
-                logits = logits[:, 0]
-                values = values[:, 0]
                 dist = Categorical(logits=logits)
                 logprobs = dist.log_prob(targets)
 
