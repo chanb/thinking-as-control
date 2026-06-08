@@ -30,7 +30,7 @@ def generate_causal_mask(seq_len, device="cpu"):
 
 
 class TransformerPolicy(nn.Module):
-    def __init__(self, n_thought_acts=2, d_model=128, nhead=4, num_layers=2, max_len=50):
+    def __init__(self, n_thought_acts=2, d_model=128, nhead=4, num_layers=2, max_len=50, markov=False):
         super().__init__()
         self.d_model = d_model
         vocab_size = 4 + 1 + n_thought_acts  # 4 movement actions, 1 padding action, and thoughta ctions
@@ -50,6 +50,7 @@ class TransformerPolicy(nn.Module):
         self.temperature = torch.tensor(1.0)
         self.use_position_encoding = True
         self.max_len = max_len
+        self.markov = markov
 
     def forward(
         self, state_seq, action_seq, input_mask=None, action_mask=None
@@ -57,7 +58,12 @@ class TransformerPolicy(nn.Module):
 
         batch_size = state_seq.shape[0]
         seq_len = state_seq.shape[1]
-        causal_mask = generate_causal_mask(seq_len)
+
+        if self.markov:
+            causal_mask = torch.full((seq_len, seq_len), float('-inf'))
+            causal_mask.fill_diagonal_(0.0)
+        else:
+            causal_mask = generate_causal_mask(seq_len)
 
         if input_mask is None:
             input_mask = torch.tensor(

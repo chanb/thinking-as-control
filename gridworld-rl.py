@@ -2,15 +2,17 @@
 import argparse
 import numpy as np
 import gym
+import random
 import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
-from torch.distributions import Categorical
+
 from collections import deque
-import random
-from torch.utils.data import Dataset, DataLoader
 from matplotlib import pyplot as plt
+from torch.distributions import Categorical
+from torch.utils.data import Dataset, DataLoader
+from tqdm import tqdm
 
 from data_utils import rl_collate_fn, RLDataset, compute_returns_and_advantages
 from envs import GridWorldEnv
@@ -44,6 +46,20 @@ def parse_args():
     )
 
     parser.add_argument(
+        "--num_layers",
+        type=int,
+        default=2,
+        help='Number of TF layers'
+    )
+
+    parser.add_argument(
+        "--markov_tf",
+        action="store_true",
+        default=False,
+        help='If set, the TF uses only the current state as input',
+    )
+
+    parser.add_argument(
         "--mask_thinking",
         action="store_true",
         default=False,
@@ -73,30 +89,34 @@ def train_rl(
     seed,
     model_path,
     n_thought_acts=3,
+    num_layers=2,
     use_action_mask=False,
+    markov_tf=False,
     save_path=None,
 ):
-    fixed_thought_len = -1 # dynamic
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    random.seed(seed)
+
     env = GridWorldEnv(
         n_thought_acts=n_thought_acts,
         n_goals=2,
         deterministic_start=True,
+        seed=seed,
     )
     device = torch.device("cpu")
-
-    # from_scratch = False
-    # use_mask = False
 
     output_file = f"{output_file_base}_{seed}"
 
     if model_path is not None:
         policy = torch.load(model_path, weights_only=False)
     else:
-        policy = TransformerPolicy(n_thought_acts=n_thought_acts, max_len=128).to(device)
-
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    random.seed(seed)
+        policy = TransformerPolicy(
+            n_thought_acts=n_thought_acts,
+            num_layers=num_layers,
+            max_len=128,
+            markov=markov_tf,
+        ).to(device)
 
     action_mask = torch.tensor([0, 1, 1, 1, 1] + [1] * n_thought_acts)
     if use_action_mask:
@@ -112,14 +132,14 @@ def train_rl(
     rewards = np.zeros(num_iterations)
     frac_thinking_actions = np.zeros(num_iterations)
 
-    for itr in range(num_iterations):
+    for itr in tqdm(range(num_iterations)):
 
         episodes = []
         total_reward = 0.0
         action_counts = np.zeros(5 + n_thought_acts)
 
         # 1. Collect data
-        for episode in range(num_episodes):
+        for episode in tqdm(range(num_episodes)):
             obs = env.reset()
             done = False
 
@@ -152,9 +172,9 @@ def train_rl(
 
                 total_reward += reward
                 rew_seq.append(reward)
-                action_seq.append(action)
                 obs = next_obs
                 timestep += 1
+                action_seq.append(action)
                 state_seq.append(torch.tensor(obs["position"], device=device))
 
             sseq = torch.stack(state_seq)
@@ -235,13 +255,16 @@ def train_rl(
         if save_path is not None:
             torch.save(policy, save_path)
 
-    # plt.plot(rewards)
-    # plt.show()
-
-    return env, policy
+    return policy
 
 
-def evaluate_agent(env, agent, n_thought_acts, use_action_mask):
+def evaluate_agent(agent, n_thought_acts, use_action_mask, seed):
+    env = GridWorldEnv(
+        n_thought_acts=n_thought_acts,
+        n_goals=2,
+        deterministic_start=True,
+        seed=seed,
+    )
 
     action_mask = torch.tensor([0, 1, 1, 1, 1] + [1] * n_thought_acts)
     if use_action_mask:
@@ -249,6 +272,8 @@ def evaluate_agent(env, agent, n_thought_acts, use_action_mask):
 
     num_episodes = 100
     total_reward = 0.0
+    total_steps = 0
+    total_act_steps = 0
 
     for episode in range(num_episodes):
         obs = env.reset()
@@ -256,31 +281,30 @@ def evaluate_agent(env, agent, n_thought_acts, use_action_mask):
 
         state_seq = [torch.tensor(obs["position"])]
         action_seq = [torch.tensor(0)]
-
-        curr_state = torch.tensor(obs["position"])[None]
-        curr_act = torch.tensor(0)[None]
         while not done:
-            sseq = torch.cat((curr_state, torch.stack(state_seq)), dim=0).unsqueeze(0)
-            aseq = torch.cat((curr_act, torch.stack(action_seq)), dim=0).unsqueeze(0)
+            sseq = torch.stack(state_seq).unsqueeze(0)
+            aseq = torch.stack(action_seq).unsqueeze(0)
 
             with torch.no_grad():
                 logits, _ = agent(sseq, aseq, action_mask=action_mask)
                 probs = F.softmax(logits, dim=-1)[0][-1]
+                # print(probs)
                 dist = Categorical(probs)
                 action = dist.sample()
-
             next_obs, reward, done, _ = env.step(action)
 
-            if action < 5 and action > 0:
-                curr_state = torch.tensor(next_obs["position"])[None]
-                curr_act = torch.tensor(action)[None]
-            total_reward += reward
+            if action > 0 and action < 5:
+                total_act_steps += 1
 
+            total_reward += reward
+            total_steps += 1
             action_seq.append(action)
             obs = next_obs
             state_seq.append(torch.tensor(obs["position"]))
 
-    print(total_reward / num_episodes)
+    print("EVAL AVG REWARD: ", total_reward / num_episodes)
+    print("EVAL AVG EP LEN: ", total_steps / num_episodes)
+    print("EVAL AVG NUM ACTS: ", total_act_steps / num_episodes)
 
 
 if __name__ == "__main__":
@@ -290,10 +314,19 @@ if __name__ == "__main__":
     model_path = args.model_path
     results_file = args.output_file
     use_action_mask = args.mask_thinking
+    markov_tf = args.markov_tf
     save_path = args.model_save_path
     n_thought_acts = args.n_thought_acts
+    num_layers = args.num_layers
 
-    env2, agent = train_rl(
-        results_file, seed, model_path, n_thought_acts, use_action_mask, save_path=save_path
+    agent = train_rl(
+        results_file,
+        seed,
+        model_path, 
+        n_thought_acts=n_thought_acts,
+        num_layers=num_layers,
+        markov_tf=markov_tf,
+        use_action_mask=use_action_mask,
+        save_path=save_path,
     )
-    evaluate_agent(env2, agent, n_thought_acts, use_action_mask)
+    evaluate_agent(agent, n_thought_acts, use_action_mask, seed + 1)
