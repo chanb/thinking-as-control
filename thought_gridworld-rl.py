@@ -16,7 +16,7 @@ from tqdm import tqdm
 
 from data_utils import rl_collate_fn, RLDataset, compute_returns_and_advantages
 from envs import TFAugmentedGridWorldEnv
-from policies import TransformerPolicy, init_weights
+from policies import ThoughtMLP, init_weights
 
 
 def parse_args():
@@ -111,17 +111,10 @@ def train_rl(
     if model_path is not None:
         policy = torch.load(model_path, weights_only=False)
     else:
-        policy = TransformerPolicy(
+        policy = ThoughtMLP(
             n_thought_acts=n_thought_acts,
-            num_layers=num_layers,
-            max_len=128,
-            markov=markov_tf,
         ).to(device)
         policy.apply(init_weights)
-
-    action_mask = torch.tensor([0, 1, 1, 1, 1] + [1] * n_thought_acts)
-    if use_action_mask:
-        action_mask = torch.tensor([0, 1, 1, 1, 1] + [0] * n_thought_acts)
 
     vf_and_policy_optimizer = optim.Adam(policy.parameters(), lr=1e-3, weight_decay=0.02)
     vf_optimizer = optim.Adam(policy.parameters(), lr=1e-3, weight_decay=0.0)
@@ -144,7 +137,7 @@ def train_rl(
             obs = env.reset()
             done = False
 
-            state_seq = [torch.tensor(obs["position"], device=device)]
+            state_seq = [torch.tensor(np.hstack((obs["position"], [obs["letter"]], obs["thought"])), device=device)]
             action_seq = [torch.tensor(0, device=device)]
             rew_seq = []
             log_probs = []
@@ -160,13 +153,13 @@ def train_rl(
                 # print(aseq)
 
                 with torch.no_grad():
-                    logits, value = policy(sseq, aseq, action_mask=action_mask)
-                    probs = F.softmax(logits, dim=-1)[0][-1]
+                    logits, value = policy(sseq[:, -1])
+                    probs = F.softmax(logits, dim=-1)[0]
                     # print(probs)
                     dist = Categorical(probs)
                     action = dist.sample()
                     log_probs.append(dist.log_prob(action).item())
-                    values.append(value[0][-1].item())
+                    values.append(value[0].item())
                     action_counts[action.item()] += 1
 
                 next_obs, reward, done, _ = env.step(action)
@@ -176,7 +169,9 @@ def train_rl(
                 obs = next_obs
                 timestep += 1
                 action_seq.append(action)
-                state_seq.append(torch.tensor(obs["position"], device=device))
+                state_seq.append(
+                    torch.tensor(np.hstack((obs["position"], [obs["letter"]], obs["thought"])), device=device)
+                )
 
             sseq = torch.stack(state_seq)
             aseq = torch.stack(action_seq)
@@ -210,7 +205,7 @@ def train_rl(
             value_mean = 0.0
 
             for states, acts, targets, returns, advs, old_logprobs, mask in loader:
-                logits, values = policy(states, acts, action_mask=action_mask)
+                logits, values = policy(states)
                 dist = Categorical(logits=logits)
                 logprobs = dist.log_prob(targets)
 
@@ -260,16 +255,12 @@ def train_rl(
 
 
 def evaluate_agent(agent, n_thought_acts, use_action_mask, seed):
-    env = GridWorldEnv(
+    env = TFAugmentedGridWorldEnv(
         n_thought_acts=n_thought_acts,
         n_goals=2,
         deterministic_start=True,
         seed=seed,
     )
-
-    action_mask = torch.tensor([0, 1, 1, 1, 1] + [1] * n_thought_acts)
-    if use_action_mask:
-        action_mask = torch.tensor([0, 1, 1, 1, 1] + [0] * n_thought_acts)
 
     num_episodes = 100
     total_reward = 0.0
@@ -284,14 +275,14 @@ def evaluate_agent(agent, n_thought_acts, use_action_mask, seed):
         action_seq = [torch.tensor(0)]
         while not done:
             sseq = torch.stack(state_seq).unsqueeze(0)
-            aseq = torch.stack(action_seq).unsqueeze(0)
 
             with torch.no_grad():
-                logits, _ = agent(sseq, aseq, action_mask=action_mask)
-                probs = F.softmax(logits, dim=-1)[0][-1]
+                logits, _ = agent(sseq[:, -1])
+                probs = F.softmax(logits, dim=-1)[0]
                 # print(probs)
                 dist = Categorical(probs)
                 action = dist.sample()
+
             next_obs, reward, done, _ = env.step(action)
 
             if action > 0 and action < 5:
@@ -299,9 +290,11 @@ def evaluate_agent(agent, n_thought_acts, use_action_mask, seed):
 
             total_reward += reward
             total_steps += 1
-            action_seq.append(action)
             obs = next_obs
-            state_seq.append(torch.tensor(obs["position"]))
+            action_seq.append(action)
+            state_seq.append(
+                torch.tensor(np.hstack((obs["position"], [obs["letter"]], obs["thought"])))
+            )
 
     print("EVAL AVG REWARD: ", total_reward / num_episodes)
     print("EVAL AVG EP LEN: ", total_steps / num_episodes)

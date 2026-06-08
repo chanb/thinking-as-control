@@ -301,7 +301,7 @@ class TFAugmentedGridWorldEnv(gym.Env):
         self.x_embedding = nn.Embedding(6, self.d_model // 4, padding_idx=0)
         self.y_embedding = nn.Embedding(6, self.d_model // 4, padding_idx=0)
         self.goal_embedding = nn.Embedding(3, self.d_model // 2, padding_idx=0)
-        self.action_embedding = nn.Embedding(n_thought_acts, self.d_model, padding_idx=0)
+        self.action_embedding = nn.Embedding(5 + n_thought_acts, self.d_model, padding_idx=0)
 
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=3 * self.d_model, nhead=4, dropout=0.0
@@ -347,13 +347,14 @@ class TFAugmentedGridWorldEnv(gym.Env):
     def step(self, action):
         self.steps += 1
 
-        self.tape.append(np.stack((
-            self.x_embedding(torch.tensor(self.agent_pos[0])),
-            self.y_embedding(torch.tensor(self.agent_pos[1])),
-            self.goal_embedding(torch.tensor(self.letter)),
-            self.action_embedding(torch.tensor(action)),
-            torch.tensor(self.thought),
-        ))[None, None])
+        with torch.no_grad():
+            self.tape.append(np.hstack((
+                self.x_embedding(torch.tensor(self.agent_pos[0])).detach().numpy(),
+                self.y_embedding(torch.tensor(self.agent_pos[1])).detach().numpy(),
+                self.goal_embedding(torch.tensor(self.letter)).detach().numpy(),
+                self.action_embedding(torch.tensor(action)).detach().numpy(),
+                self.thought,
+            ))[None, None])
 
         if action < 5:  # Directional action
             delta = [(-1, 0), (1, 0), (0, -1), (0, 1)][action - 1]
@@ -362,7 +363,8 @@ class TFAugmentedGridWorldEnv(gym.Env):
                 self.agent_pos = new_pos
             self.thought = np.zeros(self.d_model)
         else: # Thought action
-            self.thought = self.transformer(torch.cat(self.tape, dim=1))[0, -1]
+            with torch.no_grad():
+                self.thought = self.transformer(torch.cat(self.tape, dim=1))[0, -1].detach().numpy()
 
         reward = 0.0
         done = False
