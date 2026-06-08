@@ -16,7 +16,7 @@ from tqdm import tqdm
 
 from data_utils import rl_collate_fn, RLDataset, compute_returns_and_advantages
 from envs import GridWorldEnv
-from policies import TransformerPolicy
+from policies import TransformerPolicy, init_weights
 
 
 def parse_args():
@@ -117,6 +117,7 @@ def train_rl(
             max_len=128,
             markov=markov_tf,
         ).to(device)
+        policy.apply(init_weights)
 
     action_mask = torch.tensor([0, 1, 1, 1, 1] + [1] * n_thought_acts)
     if use_action_mask:

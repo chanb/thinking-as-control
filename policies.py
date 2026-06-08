@@ -4,6 +4,29 @@ import torch
 import torch.nn as nn
 
 
+def init_weights(module):
+    # Linear layers
+    if isinstance(module, nn.Linear):
+        nn.init.xavier_uniform_(module.weight)
+        if module.bias is not None:
+            nn.init.zeros_(module.bias)
+
+    # Multihead attention (Q, K, V projections + output proj)
+    elif isinstance(module, nn.MultiheadAttention):
+        nn.init.xavier_uniform_(module.in_proj_weight)
+        if module.in_proj_bias is not None:
+            nn.init.zeros_(module.in_proj_bias)
+
+        nn.init.xavier_uniform_(module.out_proj.weight)
+        if module.out_proj.bias is not None:
+            nn.init.zeros_(module.out_proj.bias)
+
+    # LayerNorm
+    elif isinstance(module, nn.LayerNorm):
+        nn.init.ones_(module.weight)
+        nn.init.zeros_(module.bias)
+
+
 class PositionalEncoding(nn.Module):
     def __init__(self, d_model, max_len=10):
         super().__init__()
@@ -43,7 +66,7 @@ class TransformerPolicy(nn.Module):
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=2 * d_model, nhead=nhead, dropout=0.0
         )
-        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers, enable_nested_tensor=False)
 
         self.policy_head = nn.Linear(2 * d_model, vocab_size)
         self.value_head = nn.Linear(2 * d_model, 1)
@@ -88,7 +111,11 @@ class TransformerPolicy(nn.Module):
             input_seq *= math.sqrt(self.d_model)
             input_seq = self.pos_encoder(input_seq)
 
-        src_key_padding = ~(input_mask.transpose(0, 1))
+        src_key_padding = torch.where(
+            input_mask.transpose(0, 1),
+            0.0,
+            float("-inf"),
+        )
 
         input_seq = input_seq.transpose(0, 1)
         src_key_padding = src_key_padding.transpose(0, 1)
