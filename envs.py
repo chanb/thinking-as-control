@@ -281,7 +281,7 @@ class DebugEnv(GridWorldEnv):
 
 
 class TFAugmentedGridWorldEnv(gym.Env):
-    def __init__(self, n_goals=2, deterministic_start=False, n_thought_acts=3, seed=42):
+    def __init__(self, n_goals=2, deterministic_start=False, n_thought_acts=3, d_model=128, seed=42):
         super(TFAugmentedGridWorldEnv, self).__init__()
         self.rng = np.random.RandomState(seed)
         self.grid_size = GRID_SIZE
@@ -297,7 +297,7 @@ class TFAugmentedGridWorldEnv(gym.Env):
         self.action_space = gym.spaces.Discrete(len(self.action_meanings))
 
         # Thought space
-        self.d_model = 128
+        self.d_model = d_model
         self.x_embedding = nn.Embedding(6, self.d_model // 4, padding_idx=0)
         self.y_embedding = nn.Embedding(6, self.d_model // 4, padding_idx=0)
         self.goal_embedding = nn.Embedding(3, self.d_model // 2, padding_idx=0)
@@ -332,7 +332,7 @@ class TFAugmentedGridWorldEnv(gym.Env):
             )
         self.letter = self.rng.choice(self.letters)
         self.goal = self.letter_goals[self.letter]
-        self.thought = np.zeros(self.d_model, dtype=np.float32)
+        self.thought = torch.zeros(self.d_model, dtype=torch.float32)
         self.tape = []
         self.steps = 0
         return self._get_obs()
@@ -341,18 +341,18 @@ class TFAugmentedGridWorldEnv(gym.Env):
         return {
             "letter": self.letter,
             "position": self.agent_pos.copy(),
-            "thought": self.thought.copy(),
+            "thought": self.thought.clone(),
         }
 
     def step(self, action):
         self.steps += 1
 
         with torch.no_grad():
-            self.tape.append(np.hstack((
-                self.x_embedding(torch.tensor(self.agent_pos[0])).detach().numpy(),
-                self.y_embedding(torch.tensor(self.agent_pos[1])).detach().numpy(),
-                self.goal_embedding(torch.tensor(self.letter)).detach().numpy(),
-                self.action_embedding(torch.tensor(action)).detach().numpy(),
+            self.tape.append(torch.hstack((
+                self.x_embedding(torch.tensor(self.agent_pos[0])),
+                self.y_embedding(torch.tensor(self.agent_pos[1])),
+                self.goal_embedding(torch.tensor(self.letter)),
+                self.action_embedding(torch.tensor(action)),
                 self.thought,
             ))[None, None])
 
@@ -361,10 +361,10 @@ class TFAugmentedGridWorldEnv(gym.Env):
             new_pos = self.agent_pos + np.array(delta)
             if np.all((1 <= new_pos) & (new_pos <= self.grid_size)):
                 self.agent_pos = new_pos
-            self.thought = np.zeros(self.d_model)
+            self.thought = torch.zeros(self.d_model, dtype=torch.float32)
         else: # Thought action
             with torch.no_grad():
-                self.thought = self.transformer(torch.cat(self.tape, dim=1))[0, -1].detach().numpy()
+                self.thought = self.transformer(torch.cat(self.tape, dim=1))[0, -1, -self.d_model:]
 
         reward = 0.0
         done = False

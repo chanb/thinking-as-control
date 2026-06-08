@@ -159,7 +159,6 @@ class ThoughtMLP(nn.Module):
 
         logits = self.policy_head(state_embed)
         logits = logits * self.temperature
-        logits = logits.transpose(0, 1)
 
-        value = self.value_head(state_embed).transpose(0, 1).squeeze(-1)
+        value = self.value_head(state_embed).squeeze(-1)
         return logits, value

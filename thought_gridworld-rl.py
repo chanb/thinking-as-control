@@ -46,27 +46,6 @@ def parse_args():
     )
 
     parser.add_argument(
-        "--num_layers",
-        type=int,
-        default=2,
-        help='Number of TF layers'
-    )
-
-    parser.add_argument(
-        "--markov_tf",
-        action="store_true",
-        default=False,
-        help='If set, the TF uses only the current state as input',
-    )
-
-    parser.add_argument(
-        "--mask_thinking",
-        action="store_true",
-        default=False,
-        help='If set, mask out "thinking" actions during evaluation',
-    )
-
-    parser.add_argument(
         "--seed",
         type=int,
         default=42,
@@ -89,9 +68,7 @@ def train_rl(
     seed,
     model_path,
     n_thought_acts=3,
-    num_layers=2,
-    use_action_mask=False,
-    markov_tf=False,
+    d_model=128,
     save_path=None,
 ):
     np.random.seed(seed)
@@ -101,7 +78,8 @@ def train_rl(
     env = TFAugmentedGridWorldEnv(
         n_thought_acts=n_thought_acts,
         n_goals=2,
-        deterministic_start=True,
+        deterministic_start=False,
+        d_model=d_model,
         seed=seed,
     )
     device = torch.device("cpu")
@@ -113,6 +91,7 @@ def train_rl(
     else:
         policy = ThoughtMLP(
             n_thought_acts=n_thought_acts,
+            d_model=d_model,
         ).to(device)
         policy.apply(init_weights)
 
@@ -179,7 +158,6 @@ def train_rl(
             returns, advs = compute_returns_and_advantages(rew_seq, values)
             episodes.append((sseq, aseq, returns, advs, log_prob_seq))
             # assert episode < 2
-
         frac_thinking_actions[itr] = action_counts[5:].sum() / action_counts.sum()
         rewards[itr] = total_reward / num_episodes
         print(
@@ -254,11 +232,12 @@ def train_rl(
     return policy
 
 
-def evaluate_agent(agent, n_thought_acts, use_action_mask, seed):
+def evaluate_agent(agent, n_thought_acts, use_action_mask, d_model, seed):
     env = TFAugmentedGridWorldEnv(
         n_thought_acts=n_thought_acts,
         n_goals=2,
-        deterministic_start=True,
+        deterministic_start=False,
+        d_model=d_model,
         seed=seed,
     )
 
@@ -271,7 +250,7 @@ def evaluate_agent(agent, n_thought_acts, use_action_mask, seed):
         obs = env.reset()
         done = False
 
-        state_seq = [torch.tensor(obs["position"])]
+        state_seq = [torch.tensor(np.hstack((obs["position"], [obs["letter"]], obs["thought"])))]
         action_seq = [torch.tensor(0)]
         while not done:
             sseq = torch.stack(state_seq).unsqueeze(0)
@@ -307,20 +286,16 @@ if __name__ == "__main__":
     seed = args.seed
     model_path = args.model_path
     results_file = args.output_file
-    use_action_mask = args.mask_thinking
-    markov_tf = args.markov_tf
     save_path = args.model_save_path
     n_thought_acts = args.n_thought_acts
-    num_layers = args.num_layers
+    d_model=16
 
     agent = train_rl(
         results_file,
         seed,
         model_path, 
         n_thought_acts=n_thought_acts,
-        num_layers=num_layers,
-        markov_tf=markov_tf,
-        use_action_mask=use_action_mask,
+        d_model=d_model,
         save_path=save_path,
     )
-    evaluate_agent(agent, n_thought_acts, use_action_mask, seed + 1)
+    evaluate_agent(agent, n_thought_acts, d_model, seed + 1)
