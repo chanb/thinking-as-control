@@ -5,6 +5,7 @@ import random
 import torch
 import torch.nn as nn
 
+from policies import init_weights
 
 # BASE SETTING
 # GRID_SIZE = 5
@@ -280,6 +281,80 @@ class DebugEnv(GridWorldEnv):
 
 
 
+class CachedEncoderLayer(nn.Module):
+    def __init__(self, d_model=256, nhead=8):
+        super().__init__()
+
+        self.self_attn = nn.MultiheadAttention(
+            d_model,
+            nhead,
+            batch_first=True,
+        )
+
+        self.ffn = nn.Sequential(
+            nn.Linear(d_model, 4 * d_model),
+            nn.GELU(),
+            nn.Linear(4 * d_model, d_model),
+        )
+
+        self.norm1 = nn.LayerNorm(d_model)
+        self.norm2 = nn.LayerNorm(d_model)
+
+    def forward(self, x, kv_cache=None):
+        """
+        x: [B, 1, D] (new token only)
+        kv_cache: previous hidden states for this layer
+                  [B, T, D]
+        """
+
+        if kv_cache is None:
+            kv = x
+        else:
+            kv = torch.cat([kv_cache, x], dim=1)
+
+        attn_out, _ = self.self_attn(
+            query=x,   # current token
+            key=kv,    # all previous + current
+            value=kv,
+            need_weights=False,
+        )
+
+        x = self.norm1(x + attn_out)
+
+        ff = self.ffn(x)
+        x = self.norm2(x + ff)
+
+        return x, kv
+
+
+class TwoLayerTransformer(nn.Module):
+    def __init__(self, d_model=256, n_heads=8):
+        super().__init__()
+
+        self.layer1 = CachedEncoderLayer(d_model, n_heads)
+        self.layer2 = CachedEncoderLayer(d_model, n_heads)
+
+    def forward(self, x, caches):
+        """
+        x: [B,1,D]
+
+        caches = {
+            "l1": layer1_cache,
+            "l2": layer2_cache,
+        }
+        """
+
+        x, new_l1 = self.layer1(x, caches["l1"])
+        x, new_l2 = self.layer2(x, caches["l2"])
+
+        new_caches = {
+            "l1": new_l1,
+            "l2": new_l2,
+        }
+
+        return x, new_caches
+
+
 class TFAugmentedGridWorldEnv(gym.Env):
     def __init__(self, n_goals=2, deterministic_start=False, n_thought_acts=3, d_model=128, seed=42):
         super(TFAugmentedGridWorldEnv, self).__init__()
@@ -303,10 +378,9 @@ class TFAugmentedGridWorldEnv(gym.Env):
         self.goal_embedding = nn.Embedding(3, self.d_model // 2, padding_idx=0)
         self.action_embedding = nn.Embedding(5 + n_thought_acts, self.d_model, padding_idx=0)
 
-        encoder_layer = nn.TransformerEncoderLayer(
-            d_model=3 * self.d_model, nhead=4, dropout=0.0
-        )
-        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=2, enable_nested_tensor=False)
+        self.transformer = TwoLayerTransformer(3 * self.d_model, n_heads=4)
+        self.transformer.apply(init_weights)
+        self.transformer.eval()
 
         self.observation_space = gym.spaces.Dict(
             {
@@ -333,7 +407,10 @@ class TFAugmentedGridWorldEnv(gym.Env):
         self.letter = self.rng.choice(self.letters)
         self.goal = self.letter_goals[self.letter]
         self.thought = torch.zeros(self.d_model, dtype=torch.float32)
-        self.tape = []
+        self.cache = {
+            "l1": None,
+            "l2": None,
+        }
         self.steps = 0
         return self._get_obs()
 
@@ -347,24 +424,29 @@ class TFAugmentedGridWorldEnv(gym.Env):
     def step(self, action):
         self.steps += 1
 
-        with torch.no_grad():
-            self.tape.append(torch.hstack((
-                self.x_embedding(torch.tensor(self.agent_pos[0])),
-                self.y_embedding(torch.tensor(self.agent_pos[1])),
-                self.goal_embedding(torch.tensor(self.letter)),
-                self.action_embedding(torch.tensor(action)),
-                self.thought,
-            ))[None, None])
-
         if action < 5:  # Directional action
             delta = [(-1, 0), (1, 0), (0, -1), (0, 1)][action - 1]
             new_pos = self.agent_pos + np.array(delta)
             if np.all((1 <= new_pos) & (new_pos <= self.grid_size)):
                 self.agent_pos = new_pos
             self.thought = torch.zeros(self.d_model, dtype=torch.float32)
+            self.cache = {
+                "l1": None,
+                "l2": None,
+            }
         else: # Thought action
             with torch.no_grad():
-                self.thought = self.transformer(torch.cat(self.tape, dim=1))[0, -1, -self.d_model:]
+                self.thought, self.cache = self.transformer(
+                    torch.hstack((
+                        self.x_embedding(torch.tensor(self.agent_pos[0])),
+                        self.y_embedding(torch.tensor(self.agent_pos[1])),
+                        self.goal_embedding(torch.tensor(self.letter)),
+                        self.action_embedding(torch.tensor(action)),
+                        self.thought,
+                    ))[None, None],
+                    self.cache
+                )
+                self.thought = self.thought[0, 0, -self.d_model:].detach()
 
         reward = 0.0
         done = False

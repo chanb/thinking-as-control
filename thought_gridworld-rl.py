@@ -78,7 +78,7 @@ def train_rl(
     env = TFAugmentedGridWorldEnv(
         n_thought_acts=n_thought_acts,
         n_goals=2,
-        deterministic_start=False,
+        deterministic_start=True,
         d_model=d_model,
         seed=seed,
     )
@@ -232,11 +232,11 @@ def train_rl(
     return policy
 
 
-def evaluate_agent(agent, n_thought_acts, use_action_mask, d_model, seed):
+def evaluate_agent(agent, n_thought_acts, d_model, seed):
     env = TFAugmentedGridWorldEnv(
         n_thought_acts=n_thought_acts,
         n_goals=2,
-        deterministic_start=False,
+        deterministic_start=True,
         d_model=d_model,
         seed=seed,
     )
@@ -288,7 +288,7 @@ if __name__ == "__main__":
     results_file = args.output_file
     save_path = args.model_save_path
     n_thought_acts = args.n_thought_acts
-    d_model=16
+    d_model=4
 
     agent = train_rl(
         results_file,

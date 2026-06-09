@@ -26,6 +26,12 @@ def init_weights(module):
         nn.init.ones_(module.weight)
         nn.init.zeros_(module.bias)
 
+    # Embedding
+    # elif isinstance(module, nn.Embedding):
+    #     nn.init.normal_(module.weight)
+        # TODO: Do this
+        # module.weight = module.weight / torch.norm(module.weight, p=2, dim=-1)
+
 
 class PositionalEncoding(nn.Module):
     def __init__(self, d_model, max_len=10):
