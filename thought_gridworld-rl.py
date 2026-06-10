@@ -46,6 +46,13 @@ def parse_args():
     )
 
     parser.add_argument(
+        "--d_model",
+        type=int,
+        default=8,
+        help='Dimensionality of the thought state space'
+    )
+
+    parser.add_argument(
         "--seed",
         type=int,
         default=42,
@@ -127,6 +134,8 @@ def train_rl(
                 sseq = torch.stack(state_seq).unsqueeze(0)
                 aseq = torch.stack(action_seq).unsqueeze(0)
 
+                # import ipdb
+                # ipdb.set_trace()
                 # print('--')
                 # print(sseq)
                 # print(aseq)
@@ -233,6 +242,7 @@ def train_rl(
 
 
 def evaluate_agent(agent, n_thought_acts, d_model, seed):
+    # SHOULD CLONE THE ENV BECAUSE TF IS DIFFERENT OTHERWISE
     env = TFAugmentedGridWorldEnv(
         n_thought_acts=n_thought_acts,
         n_goals=2,
@@ -288,7 +298,7 @@ if __name__ == "__main__":
     results_file = args.output_file
     save_path = args.model_save_path
     n_thought_acts = args.n_thought_acts
-    d_model=4
+    d_model = args.d_model
 
     agent = train_rl(
         results_file,

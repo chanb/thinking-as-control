@@ -147,21 +147,25 @@ class ThoughtMLP(nn.Module):
         super().__init__()
         self.d_model = d_model
         vocab_size = 4 + 1 + n_thought_acts  # 4 movement actions, 1 padding action, and thoughta ctions
-        self.x_embedding = nn.Embedding(6, d_model // 4, padding_idx=0)
-        self.y_embedding = nn.Embedding(6, d_model // 4, padding_idx=0)
-        self.goal_embedding = nn.Embedding(3, d_model // 2, padding_idx=0)
-        self.policy_head = nn.Linear(2 * d_model, vocab_size)
-        self.value_head = nn.Linear(2 * d_model, 1)
+        # self.x_embedding = nn.Embedding(6, d_model // 4, padding_idx=0)
+        # self.y_embedding = nn.Embedding(6, d_model // 4, padding_idx=0)
+        # self.goal_embedding = nn.Embedding(3, d_model // 2, padding_idx=0)
+        # self.policy_head = nn.Linear(2 * d_model, vocab_size)
+        # self.value_head = nn.Linear(2 * d_model, 1)
+        self.policy_head = nn.Linear(3 + d_model, vocab_size)
+        self.value_head = nn.Linear(3 + d_model, 1)
         self.temperature = torch.tensor(1.0)
 
     def forward(
         self, state_seq, *args, **kwargs
     ):
         # state_embed = self.state_embedding(state_seq.float())  # [B, seq, D]
-        x_embed = self.x_embedding(state_seq[..., 0].int())
-        y_embed = self.y_embedding(state_seq[..., 1].int())
-        goal_embed = self.goal_embedding(state_seq[..., 2].int())
-        state_embed = torch.cat((x_embed, y_embed, goal_embed, state_seq[..., 3:].float()), dim=-1)
+        # x_embed = self.x_embedding(state_seq[..., 0].int())
+        # y_embed = self.y_embedding(state_seq[..., 1].int())
+        # goal_embed = self.goal_embedding(state_seq[..., 2].int())
+        # state_embed = torch.cat((x_embed, y_embed, goal_embed, state_seq[..., 3:].float()), dim=-1)
+
+        state_embed = state_seq.float()
 
         logits = self.policy_head(state_embed)
         logits = logits * self.temperature
