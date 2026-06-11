@@ -155,6 +155,7 @@ class ThoughtMLP(nn.Module):
         self.policy_head = nn.Linear(3 + d_model, vocab_size)
         self.value_head = nn.Linear(3 + d_model, 1)
         self.temperature = torch.tensor(1.0)
+        self.action_mask = ~torch.tensor([0, 1, 1, 1, 1] + [1] * n_thought_acts).bool()
 
     def forward(
         self, state_seq, *args, **kwargs
@@ -169,6 +170,7 @@ class ThoughtMLP(nn.Module):
 
         logits = self.policy_head(state_embed)
         logits = logits * self.temperature
+        logits = logits.masked_fill(self.action_mask, -1e10)
 
         value = self.value_head(state_embed).squeeze(-1)
         return logits, value

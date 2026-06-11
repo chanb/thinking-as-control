@@ -373,12 +373,12 @@ class TFAugmentedGridWorldEnv(gym.Env):
 
         # Thought space
         self.d_model = d_model
-        self.x_embedding = nn.Embedding(6, self.d_model // 4, padding_idx=0)
-        self.y_embedding = nn.Embedding(6, self.d_model // 4, padding_idx=0)
-        self.goal_embedding = nn.Embedding(3, self.d_model // 2, padding_idx=0)
-        self.action_embedding = nn.Embedding(5 + n_thought_acts, self.d_model, padding_idx=0)
+        self.x_embedding = nn.Embedding(6, self.d_model // 8, padding_idx=0)
+        self.y_embedding = nn.Embedding(6, self.d_model // 8, padding_idx=0)
+        self.goal_embedding = nn.Embedding(3, self.d_model // 4, padding_idx=0)
+        self.action_embedding = nn.Embedding(5 + n_thought_acts, self.d_model // 2, padding_idx=0)
 
-        self.transformer = TwoLayerTransformer(3 * self.d_model, n_heads=4)
+        self.transformer = TwoLayerTransformer(self.d_model, n_heads=4)
         self.transformer.apply(init_weights)
         self.transformer.eval()
 
@@ -425,10 +425,11 @@ class TFAugmentedGridWorldEnv(gym.Env):
         self.steps += 1
 
         if action < 5:  # Directional action
-            delta = [(-1, 0), (1, 0), (0, -1), (0, 1)][action - 1]
-            new_pos = self.agent_pos + np.array(delta)
-            if np.all((1 <= new_pos) & (new_pos <= self.grid_size)):
-                self.agent_pos = new_pos
+            if action > 0:
+                delta = [(-1, 0), (1, 0), (0, -1), (0, 1)][action - 1]
+                new_pos = self.agent_pos + np.array(delta)
+                if np.all((1 <= new_pos) & (new_pos <= self.grid_size)):
+                    self.agent_pos = new_pos
             self.thought = torch.zeros(self.d_model, dtype=torch.float32)
             self.cache = {
                 "l1": None,
@@ -442,11 +443,11 @@ class TFAugmentedGridWorldEnv(gym.Env):
                         self.y_embedding(torch.tensor(self.agent_pos[1])),
                         self.goal_embedding(torch.tensor(self.letter)),
                         self.action_embedding(torch.tensor(action)),
-                        self.thought,
                     ))[None, None],
                     self.cache
                 )
-                self.thought = self.thought[0, 0, -self.d_model:].detach()
+                self.thought = self.thought[0, 0].detach()
+                # self.thought = self.thought / torch.norm(self.thought, p=2)
 
         reward = 0.0
         done = False

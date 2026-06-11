@@ -143,7 +143,7 @@ def train_rl(
                 with torch.no_grad():
                     logits, value = policy(sseq[:, -1])
                     probs = F.softmax(logits, dim=-1)[0]
-                    # print(probs)
+                    print(probs)
                     dist = Categorical(probs)
                     action = dist.sample()
                     log_probs.append(dist.log_prob(action).item())
