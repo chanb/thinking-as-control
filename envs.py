@@ -282,8 +282,10 @@ class DebugEnv(GridWorldEnv):
 
 
 class CachedEncoderLayer(nn.Module):
-    def __init__(self, d_model=256, nhead=8):
+    def __init__(self, d_model=256, nhead=8, max_window=-1):
         super().__init__()
+
+        self.max_window = max_window
 
         self.self_attn = nn.MultiheadAttention(
             d_model,
@@ -311,6 +313,8 @@ class CachedEncoderLayer(nn.Module):
             kv = x
         else:
             kv = torch.cat([kv_cache, x], dim=1)
+            if self.max_window > 0 and kv.shape[1] > self.max_window:
+                kv = kv[:, 1:]
 
         attn_out, _ = self.self_attn(
             query=x,   # current token
@@ -460,16 +464,116 @@ class TFAugmentedGridWorldEnv(gym.Env):
 
         return self._get_obs(), reward, done, {}
 
-    def generate_expert_action(self):
-        goal = np.array(self.goal)
-        act = 5
-        direction = goal - self.agent_pos
-        if direction[0] < 0:
-            act = 1
-        elif direction[0] > 0:
-            act = 2
-        elif direction[1] < 0:
-            act = 3
-        elif direction[1] > 0:
-            act = 4
-        return act
+
+class TFAugmentedGridWorldEnv2(gym.Env):
+    def __init__(self, n_goals=2, deterministic_start=False, n_thought_acts=3, n_thought_states=10, d_model=128, seed=42):
+        super(TFAugmentedGridWorldEnv2, self).__init__()
+        self.rng = np.random.RandomState(seed)
+        self.grid_size = GRID_SIZE
+        self.max_steps = MAX_STEPS
+        self.deterministic_start = deterministic_start
+        self.letter_goals = {
+            1: (self.grid_size, self.grid_size),  # 'A'
+        }
+        if n_goals > 1:
+            self.letter_goals[2] = (1, 1)  # 'C'
+        self.letters = list(self.letter_goals.keys())
+        self.action_meanings = ["UP", "DOWN", "LEFT", "RIGHT"] + [f"THOUGHT_{ii}" for ii in range(n_thought_acts)]
+        self.action_space = gym.spaces.Discrete(len(self.action_meanings))
+
+        # Thought space
+        self.d_model = d_model
+        self.x_embedding = nn.Embedding(6, self.d_model // 4, padding_idx=0)
+        self.y_embedding = nn.Embedding(6, self.d_model // 4, padding_idx=0)
+        self.goal_embedding = nn.Embedding(3, self.d_model // 2, padding_idx=0)
+        self.action_embedding = nn.Embedding(5 + n_thought_acts, self.d_model, padding_idx=0)
+        self.thought_state_embedding = nn.Linear(self.d_model, n_thought_states)
+        self.thought_state_embedding.apply(init_weights)
+        self.lnorm = nn.LayerNorm(d_model)
+        self.lnorm.apply(init_weights)
+
+        self.transformer = TwoLayerTransformer(self.d_model * 3, n_heads=4)
+        self.transformer.apply(init_weights)
+        self.transformer.eval()
+
+        self.observation_space = gym.spaces.Dict(
+            {
+                "letter": gym.spaces.Discrete(len(self.letters)),  # 0 = A, 1 = B, 2 = C
+                "position": gym.spaces.Box(
+                    low=1, high=self.grid_size, shape=(2,), dtype=np.int32
+                ),
+                "thought": gym.spaces.Box(
+                    low=-np.inf, high=np.inf, shape=(self.d_model,), dtype=np.float32
+                )
+            }
+        )
+
+    def reset(self):
+        if self.deterministic_start:
+            self.agent_pos = [self.grid_size // 2 + 1, self.grid_size // 2 + 1]
+        else:
+            self.agent_pos = np.array(
+                [
+                    self.rng.randint(1, self.grid_size),
+                    self.rng.randint(1, self.grid_size),
+                ]
+            )
+        self.letter = self.rng.choice(self.letters)
+        self.goal = self.letter_goals[self.letter]
+        self.thought = torch.zeros(self.d_model, dtype=torch.float32)
+        self.cache = {
+            "l1": None,
+            "l2": None,
+        }
+        self.steps = 0
+        return self._get_obs()
+
+    def _get_obs(self):
+        return {
+            "letter": self.letter,
+            "position": self.agent_pos.copy(),
+            "thought": self.thought.clone(),
+        }
+
+    def step(self, action):
+        self.steps += 1
+
+        if action < 5:  # Directional action
+            if action > 0:
+                delta = [(-1, 0), (1, 0), (0, -1), (0, 1)][action - 1]
+                new_pos = self.agent_pos + np.array(delta)
+                if np.all((1 <= new_pos) & (new_pos <= self.grid_size)):
+                    self.agent_pos = new_pos
+            self.thought = torch.zeros(self.d_model, dtype=torch.float32)
+            self.cache = {
+                "l1": None,
+                "l2": None,
+            }
+        else: # Thought action
+            with torch.no_grad():
+                self.thought, self.cache = self.transformer(
+                    torch.hstack((
+                        self.x_embedding(torch.tensor(self.agent_pos[0])),
+                        self.y_embedding(torch.tensor(self.agent_pos[1])),
+                        self.goal_embedding(torch.tensor(self.letter)),
+                        self.action_embedding(torch.tensor(action)),
+                        self.thought,
+                    ))[None, None],
+                    self.cache
+                )
+                self.thought = self.thought_state_embedding(
+                    self.lnorm(self.thought[..., -self.d_model:]
+                ))
+                # self.thought = self.thought / torch.norm(self.thought, p=2)
+                self.thought = self.thought_state_embedding.weight[torch.argmax(self.thought[0, 0])].detach()
+
+        reward = 0.0
+        done = False
+        if tuple(self.agent_pos) == self.goal:
+            reward = 1.0
+            done = True
+
+        if self.steps >= self.max_steps:
+            done = True
+
+        return self._get_obs(), reward, done, {}

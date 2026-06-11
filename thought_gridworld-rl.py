@@ -1,5 +1,6 @@
 """RL training code for learning to think."""
 import argparse
+import copy
 import numpy as np
 import gym
 import random
@@ -15,7 +16,7 @@ from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 
 from data_utils import rl_collate_fn, RLDataset, compute_returns_and_advantages
-from envs import TFAugmentedGridWorldEnv
+from envs import TFAugmentedGridWorldEnv, TFAugmentedGridWorldEnv2
 from policies import ThoughtMLP, init_weights
 
 
@@ -39,6 +40,13 @@ def parse_args():
     )
 
     parser.add_argument(
+        "--n_thought_states",
+        type=int,
+        default=10,
+        help='Number of thought states'
+    )
+
+    parser.add_argument(
         "--n_thought_acts",
         type=int,
         default=3,
@@ -50,6 +58,14 @@ def parse_args():
         type=int,
         default=8,
         help='Dimensionality of the thought state space'
+    )
+
+    parser.add_argument(
+        "--env",
+        type=str,
+        default="v1",
+        choices=["v1", "v2"],
+        help='The environment to use'
     )
 
     parser.add_argument(
@@ -71,6 +87,7 @@ def parse_args():
 
 # TODO: Add action masking for fixed thought steps.
 def train_rl(
+    env,
     output_file_base,
     seed,
     model_path,
@@ -78,17 +95,6 @@ def train_rl(
     d_model=128,
     save_path=None,
 ):
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    random.seed(seed)
-
-    env = TFAugmentedGridWorldEnv(
-        n_thought_acts=n_thought_acts,
-        n_goals=2,
-        deterministic_start=True,
-        d_model=d_model,
-        seed=seed,
-    )
     device = torch.device("cpu")
 
     output_file = f"{output_file_base}_{seed}"
@@ -143,7 +149,7 @@ def train_rl(
                 with torch.no_grad():
                     logits, value = policy(sseq[:, -1])
                     probs = F.softmax(logits, dim=-1)[0]
-                    print(probs)
+                    # print(probs)
                     dist = Categorical(probs)
                     action = dist.sample()
                     log_probs.append(dist.log_prob(action).item())
@@ -241,16 +247,7 @@ def train_rl(
     return policy
 
 
-def evaluate_agent(agent, n_thought_acts, d_model, seed):
-    # SHOULD CLONE THE ENV BECAUSE TF IS DIFFERENT OTHERWISE
-    env = TFAugmentedGridWorldEnv(
-        n_thought_acts=n_thought_acts,
-        n_goals=2,
-        deterministic_start=True,
-        d_model=d_model,
-        seed=seed,
-    )
-
+def evaluate_agent(env, agent, n_thought_acts, d_model, seed):
     num_episodes = 100
     total_reward = 0.0
     total_steps = 0
@@ -297,10 +294,37 @@ if __name__ == "__main__":
     model_path = args.model_path
     results_file = args.output_file
     save_path = args.model_save_path
+    n_thought_states = args.n_thought_states
     n_thought_acts = args.n_thought_acts
     d_model = args.d_model
+    env = args.env
+
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    random.seed(seed)
+
+    if env == "v1":
+        env = TFAugmentedGridWorldEnv(
+            n_thought_acts=n_thought_acts,
+            n_goals=2,
+            deterministic_start=True,
+            d_model=d_model,
+            seed=seed,
+        )
+    elif env == "v2":
+        env = TFAugmentedGridWorldEnv2(
+            n_thought_states=n_thought_states,
+            n_thought_acts=n_thought_acts,
+            n_goals=2,
+            deterministic_start=True,
+            d_model=d_model,
+            seed=seed,
+        )
+    eval_env = copy.deepcopy(env)
+
 
     agent = train_rl(
+        env,
         results_file,
         seed,
         model_path, 
@@ -308,4 +332,4 @@ if __name__ == "__main__":
         d_model=d_model,
         save_path=save_path,
     )
-    evaluate_agent(agent, n_thought_acts, d_model, seed + 1)
+    evaluate_agent(eval_env, agent, n_thought_acts, d_model, seed + 1)
