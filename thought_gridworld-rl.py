@@ -16,7 +16,12 @@ from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 
 from data_utils import rl_collate_fn, RLDataset, compute_returns_and_advantages
-from envs import TFAugmentedGridWorldEnv, TFAugmentedGridWorldEnv2
+from envs import (
+    TFAugmentedGridWorldEnv,
+    TFAugmentedGridWorldEnv2,
+    TFAugmentedGridWorldEnv3,
+    TFAugmentedGridWorldEnv4
+)
 from policies import ThoughtMLP, init_weights
 
 
@@ -64,8 +69,15 @@ def parse_args():
         "--env",
         type=str,
         default="v1",
-        choices=["v1", "v2"],
+        choices=["v1", "v2", "v3", "v4"],
         help='The environment to use'
+    )
+
+    parser.add_argument(
+        "--gamma",
+        type=float,
+        default=0.99,
+        help="Discount factor",
     )
 
     parser.add_argument(
@@ -91,6 +103,7 @@ def train_rl(
     output_file_base,
     seed,
     model_path,
+    gamma=0.99,
     n_thought_acts=3,
     d_model=128,
     save_path=None,
@@ -170,7 +183,7 @@ def train_rl(
             sseq = torch.stack(state_seq)
             aseq = torch.stack(action_seq)
             log_prob_seq = torch.tensor(log_probs)
-            returns, advs = compute_returns_and_advantages(rew_seq, values)
+            returns, advs = compute_returns_and_advantages(rew_seq, values, gamma=gamma)
             episodes.append((sseq, aseq, returns, advs, log_prob_seq))
             # assert episode < 2
         frac_thinking_actions[itr] = action_counts[5:].sum() / action_counts.sum()
@@ -297,6 +310,7 @@ if __name__ == "__main__":
     n_thought_states = args.n_thought_states
     n_thought_acts = args.n_thought_acts
     d_model = args.d_model
+    gamma = args.gamma
     env = args.env
 
     np.random.seed(seed)
@@ -320,6 +334,26 @@ if __name__ == "__main__":
             d_model=d_model,
             seed=seed,
         )
+    elif env == "v3":
+        env = TFAugmentedGridWorldEnv3(
+            n_thought_states=n_thought_states,
+            n_thought_acts=n_thought_acts,
+            n_goals=2,
+            deterministic_start=True,
+            d_model=d_model,
+            seed=seed,
+        )
+    elif env == "v4":
+        env = TFAugmentedGridWorldEnv4(
+            n_thought_states=n_thought_states,
+            n_thought_acts=n_thought_acts,
+            n_goals=2,
+            deterministic_start=True,
+            d_model=d_model,
+            seed=seed,
+        )
+    else:
+        raise NotImplementedError
     eval_env = copy.deepcopy(env)
 
 
@@ -328,6 +362,7 @@ if __name__ == "__main__":
         results_file,
         seed,
         model_path, 
+        gamma=gamma,
         n_thought_acts=n_thought_acts,
         d_model=d_model,
         save_path=save_path,
