@@ -86,8 +86,9 @@ class TwoLayerTransformer(nn.Module):
 
 
 class TFAugmentedFrozenLakeEnv(gym.Env):
-    def __init__(self, n_thought_acts=3, n_thought_states=10, d_model=128, max_steps=50):
+    def __init__(self, n_thought_acts=3, n_thought_states=10, d_model=128, max_steps=50, tabular=False):
         super(TFAugmentedFrozenLakeEnv, self).__init__()
+        self.tabular = tabular
         self.d_model = d_model
         self.base_env = gym.make(
             'FrozenLake-v1',
@@ -102,13 +103,13 @@ class TFAugmentedFrozenLakeEnv(gym.Env):
         self.max_steps = max_steps
         self.observation_space = gym.spaces.Dict(
             {
-                "env": self.base_env.observation_space,
+                "env": gym.spaces.Box(low=0, high=1, shape=(16,), dtype=int) if tabular else self.base_env.observation_space,
                 "thought": gym.spaces.Box(
                     low=-np.inf, high=np.inf, shape=(self.d_model,), dtype=np.float32
                 ),
             }
         )
-        self.obs_dim = 1
+        self.obs_dim = 16 if tabular else 1
         self.n_acts = self.base_env.action_space.n
         self.action_space = gym.spaces.Discrete(self.base_env.action_space.n + n_thought_acts)
 
@@ -144,7 +145,7 @@ class TFAugmentedFrozenLakeEnv(gym.Env):
 
     def _get_obs(self):
         return {
-            "env": self.env_obs,
+            "env": np.eye(16)[self.env_obs] if self.tabular else [self.env_obs],
             "thought": self.thought.clone(),
         }
 

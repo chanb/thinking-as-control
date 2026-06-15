@@ -63,11 +63,9 @@ def parse_args():
     )
 
     parser.add_argument(
-        "--env",
-        type=str,
-        default="v1",
-        choices=["v1", "v2", "v3", "v4"],
-        help='The environment to use'
+        "--tabular",
+        action="store_true",
+        help="Whether or not to use tabular representation",
     )
 
     parser.add_argument(
@@ -156,7 +154,7 @@ def train_rl(
             obs, _ = env.reset(rng.randint(0, 2 ** 10))
             done = False
 
-            state_seq = [torch.tensor(np.hstack(([obs["env"]], obs["thought"])), device=device)]
+            state_seq = [torch.tensor(np.hstack((obs["env"], obs["thought"])), device=device)]
             action_seq = [torch.tensor(0, device=device)]
             rew_seq = []
             log_probs = []
@@ -192,7 +190,7 @@ def train_rl(
                 timestep += 1
                 action_seq.append(action)
                 state_seq.append(
-                    torch.tensor(np.hstack(([obs["env"]], obs["thought"])), device=device)
+                    torch.tensor(np.hstack((obs["env"], obs["thought"])), device=device)
                 )
 
             sseq = torch.stack(state_seq)
@@ -329,7 +327,7 @@ if __name__ == "__main__":
     d_model = args.d_model
     gamma = args.gamma
     use_ppo = args.use_ppo
-    env = args.env
+    tabular = args.tabular
     max_steps = args.max_steps
 
     pickle.dump(
@@ -341,15 +339,13 @@ if __name__ == "__main__":
     torch.manual_seed(seed)
     random.seed(seed)
 
-    if env == "v1":
-        env = TFAugmentedFrozenLakeEnv(
-            n_thought_states=n_thought_states,
-            n_thought_acts=n_thought_acts,
-            d_model=d_model,
-            max_steps=max_steps,
-        )
-    else:
-        raise NotImplementedError
+    env = TFAugmentedFrozenLakeEnv(
+        n_thought_states=n_thought_states,
+        n_thought_acts=n_thought_acts,
+        d_model=d_model,
+        max_steps=max_steps,
+        tabular=tabular,
+    )
 
     agent = train_rl(
         env,
