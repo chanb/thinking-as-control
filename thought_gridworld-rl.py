@@ -1,28 +1,23 @@
 """RL training code for learning to think."""
 import _pickle as pickle
 import argparse
-import copy
 import numpy as np
-import gym
-import os
 import random
 import torch
-import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 
-from collections import deque
-from matplotlib import pyplot as plt
 from torch.distributions import Categorical
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from data_utils import rl_collate_fn, RLDataset, compute_returns_and_advantages
+from data_utils import (
+    rl_collate_fn,
+    RLDataset,
+    compute_returns_and_advantages
+)
 from envs import (
-    TFAugmentedGridWorldEnv,
-    TFAugmentedGridWorldEnv2,
-    TFAugmentedGridWorldEnv3,
-    TFAugmentedGridWorldEnv4
+    TFAugmentedFrozenLakeEnv
 )
 from policies import ThoughtMLP, init_weights
 
@@ -76,6 +71,13 @@ def parse_args():
     )
 
     parser.add_argument(
+        "--max_steps",
+        type=int,
+        default=50,
+        help="Maximum environment steps",
+    )
+
+    parser.add_argument(
         "--gamma",
         type=float,
         default=1.0,
@@ -111,10 +113,10 @@ def train_rl(
     output_file_base,
     seed,
     model_path,
-    gamma=0.99,
-    n_thought_acts=3,
-    d_model=128,
-    use_ppo=False,
+    gamma,
+    n_thought_acts,
+    d_model,
+    use_ppo,
     save_path=None,
 ):
     device = torch.device("cpu")
@@ -125,6 +127,8 @@ def train_rl(
         policy = torch.load(model_path, weights_only=False)
     else:
         policy = ThoughtMLP(
+            obs_dim=env.obs_dim,
+            n_acts=env.n_acts,
             n_thought_acts=n_thought_acts,
             d_model=d_model,
         ).to(device)
@@ -139,6 +143,7 @@ def train_rl(
     vf_burn_in_iters = 1
     rewards = np.zeros(num_iterations)
     frac_thinking_actions = np.zeros(num_iterations)
+    rng = np.random.RandomState(seed)
 
     for itr in tqdm(range(num_iterations)):
 
@@ -148,10 +153,10 @@ def train_rl(
 
         # 1. Collect data
         for episode in tqdm(range(num_episodes)):
-            obs = env.reset()
+            obs, _ = env.reset(rng.randint(0, 2 ** 10))
             done = False
 
-            state_seq = [torch.tensor(np.hstack((obs["position"], [obs["letter"]], obs["thought"])), device=device)]
+            state_seq = [torch.tensor(np.hstack(([obs["env"]], obs["thought"])), device=device)]
             action_seq = [torch.tensor(0, device=device)]
             rew_seq = []
             log_probs = []
@@ -167,6 +172,7 @@ def train_rl(
                 # print('--')
                 # print(sseq)
                 # print(aseq)
+                # print(obs)
 
                 with torch.no_grad():
                     logits, value = policy(sseq[:, -1])
@@ -178,7 +184,7 @@ def train_rl(
                     values.append(value[0].item())
                     action_counts[action.item()] += 1
 
-                next_obs, reward, done, _ = env.step(action)
+                next_obs, reward, done, _, _ = env.step(action)
 
                 total_reward += reward
                 rew_seq.append(reward)
@@ -186,7 +192,7 @@ def train_rl(
                 timestep += 1
                 action_seq.append(action)
                 state_seq.append(
-                    torch.tensor(np.hstack((obs["position"], [obs["letter"]], obs["thought"])), device=device)
+                    torch.tensor(np.hstack(([obs["env"]], obs["thought"])), device=device)
                 )
 
             sseq = torch.stack(state_seq)
@@ -270,17 +276,18 @@ def train_rl(
     return policy
 
 
-def evaluate_agent(env, agent, n_thought_acts, d_model, seed):
+def evaluate_agent(env, agent, seed):
     num_episodes = 100
     total_reward = 0.0
     total_steps = 0
     total_act_steps = 0
+    rng = np.random.RandomState(seed)
 
     for episode in range(num_episodes):
-        obs = env.reset()
+        obs, _ = env.reset(rng.randint(0, 2 ** 10))
         done = False
 
-        state_seq = [torch.tensor(np.hstack((obs["position"], [obs["letter"]], obs["thought"])))]
+        state_seq = [torch.tensor(np.hstack(([obs["env"]], obs["thought"])), device=device)]
         action_seq = [torch.tensor(0)]
         while not done:
             sseq = torch.stack(state_seq).unsqueeze(0)
@@ -292,7 +299,7 @@ def evaluate_agent(env, agent, n_thought_acts, d_model, seed):
                 dist = Categorical(probs)
                 action = dist.sample()
 
-            next_obs, reward, done, _ = env.step(action)
+            next_obs, reward, done, _, _ = env.step(action)
 
             if action > 0 and action < 5:
                 total_act_steps += 1
@@ -302,7 +309,7 @@ def evaluate_agent(env, agent, n_thought_acts, d_model, seed):
             obs = next_obs
             action_seq.append(action)
             state_seq.append(
-                torch.tensor(np.hstack((obs["position"], [obs["letter"]], obs["thought"])))
+                torch.tensor(np.hstack(([obs["env"]], obs["thought"])))
             )
 
     print("EVAL AVG REWARD: ", total_reward / num_episodes)
@@ -323,6 +330,7 @@ if __name__ == "__main__":
     gamma = args.gamma
     use_ppo = args.use_ppo
     env = args.env
+    max_steps = args.max_steps
 
     pickle.dump(
         args,
@@ -334,44 +342,14 @@ if __name__ == "__main__":
     random.seed(seed)
 
     if env == "v1":
-        env = TFAugmentedGridWorldEnv(
-            n_thought_acts=n_thought_acts,
-            n_goals=2,
-            deterministic_start=True,
-            d_model=d_model,
-            seed=seed,
-        )
-    elif env == "v2":
-        env = TFAugmentedGridWorldEnv2(
+        env = TFAugmentedFrozenLakeEnv(
             n_thought_states=n_thought_states,
             n_thought_acts=n_thought_acts,
-            n_goals=2,
-            deterministic_start=True,
             d_model=d_model,
-            seed=seed,
-        )
-    elif env == "v3":
-        env = TFAugmentedGridWorldEnv3(
-            n_thought_states=n_thought_states,
-            n_thought_acts=n_thought_acts,
-            n_goals=2,
-            deterministic_start=True,
-            d_model=d_model,
-            seed=seed,
-        )
-    elif env == "v4":
-        env = TFAugmentedGridWorldEnv4(
-            n_thought_states=n_thought_states,
-            n_thought_acts=n_thought_acts,
-            n_goals=2,
-            deterministic_start=True,
-            d_model=d_model,
-            seed=seed,
+            max_steps=max_steps,
         )
     else:
         raise NotImplementedError
-    eval_env = copy.deepcopy(env)
-
 
     agent = train_rl(
         env,
@@ -384,4 +362,4 @@ if __name__ == "__main__":
         use_ppo=use_ppo,
         save_path=save_path,
     )
-    evaluate_agent(eval_env, agent, n_thought_acts, d_model, seed + 1)
+    evaluate_agent(env, agent, seed + 1)

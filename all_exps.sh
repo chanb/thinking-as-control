@@ -1,4 +1,4 @@
-env=v3
+env=v1
 
 results_dir=EXPS/env_${env}-ppo
 logs_dir=EXPS/logs-env_${env}-ppo

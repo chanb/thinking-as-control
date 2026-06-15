@@ -2,5 +2,5 @@ pytorch
 seaborn
 matplotlib
 numpy
-gym
+gymnasium
 tqdm
