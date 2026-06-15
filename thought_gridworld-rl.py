@@ -1,8 +1,10 @@
 """RL training code for learning to think."""
 import _pickle as pickle
 import argparse
+import logging
 import numpy as np
 import random
+import timeit
 import torch
 import torch.optim as optim
 import torch.nn.functional as F
@@ -99,7 +101,14 @@ def parse_args():
         "--output_file",
         type=str,
         required=True,
-        help="Path to write evaluation results (e.g., results.json or results.csv)",
+        help="Path to write evaluation results",
+    )
+
+    parser.add_argument(
+        "--log_file",
+        type=str,
+        required=True,
+        help="Path to write logging",
     )
 
     return parser.parse_args()
@@ -109,6 +118,7 @@ def parse_args():
 def train_rl(
     env,
     output_file_base,
+    log_file_base,
     seed,
     model_path,
     gamma,
@@ -120,6 +130,8 @@ def train_rl(
     device = torch.device("cpu")
 
     output_file = f"{output_file_base}_{seed}"
+    log_file = f"{log_file_base}_{seed}"
+    logging.basicConfig(filename=f"{log_file}.log", level=logging.INFO)
 
     if model_path is not None:
         policy = torch.load(model_path, weights_only=False)
@@ -140,14 +152,14 @@ def train_rl(
     num_iterations = 200
     vf_burn_in_iters = 1
     rewards = np.zeros(num_iterations)
-    reach_count = 0
-    hole_count = 0
     frac_thinking_actions = np.zeros(num_iterations)
     rng = np.random.RandomState(seed)
 
-    for itr in tqdm(range(num_iterations)):
-
+    for itr in range(num_iterations):
+        tic = timeit.default_timer()
         episodes = []
+        reach_count = 0
+        hole_count = 0
         total_reward = 0.0
         action_counts = np.zeros(5 + n_thought_acts)
 
@@ -169,24 +181,24 @@ def train_rl(
 
                 # import ipdb
                 # ipdb.set_trace()
-                # print('--')
-                # print(sseq)
-                # print(aseq)
-                # print(obs)
+                # logging.info('--')
+                # logging.info(sseq)
+                # logging.info(aseq)
+                # logging.info(obs)
 
                 with torch.no_grad():
                     logits, value = policy(sseq[:, -1])
                     probs = F.softmax(logits, dim=-1)[0]
-                    # print(sseq[:, -1])
-                    # print(probs)
-                    # print(probs)
+                    # logging.info(sseq[:, -1])
+                    # logging.info(probs)
+                    # logging.info(probs)
                     dist = Categorical(probs)
                     action = dist.sample()
                     log_probs.append(dist.log_prob(action).item())
                     values.append(value[0].item())
                     action_counts[action.item()] += 1
 
-                next_obs, reward, done, _, _ = env.step(action)
+                next_obs, reward, done, _, _ = env.step(action.item())
 
                 total_reward += reward
                 rew_seq.append(reward)
@@ -211,10 +223,12 @@ def train_rl(
             # assert episode < 2
         frac_thinking_actions[itr] = action_counts[5:].sum() / action_counts.sum()
         rewards[itr] = total_reward / num_episodes
-        print(
-            f"Iter {itr}: Avg Return = {rewards[itr]}, Frac Thinking = {frac_thinking_actions[itr]}, Reach: {reach_count}, Hole: {hole_count}"
+        toc = timeit.default_timer()
+        logging.info(
+            f"Iter {itr}: Rollout = {toc - tic}s, Avg Return = {rewards[itr]}, Frac Thinking = {frac_thinking_actions[itr]}, Reach = {reach_count / num_episodes}, Hole = {hole_count / num_episodes}"
         )
 
+        tic = timeit.default_timer()
         dataset = RLDataset(episodes)
 
         # Policy Optimization
@@ -265,7 +279,7 @@ def train_rl(
                     if vf_burn_in_iters > 0 and itr == 0:
                         loss = mse_loss
                         optimizer = vf_optimizer
-                        print("Value Loss", loss.item())
+                        logging.info(f"Value Loss: {loss.item()}")
                     else:
                         loss = -(surr.sum() / num_non_masked_elements) + mse_loss
                         optimizer = vf_and_policy_optimizer
@@ -280,6 +294,8 @@ def train_rl(
         np.save(f"{output_file}-thinkactions.npy", frac_thinking_actions)
         if save_path is not None:
             torch.save(policy, save_path)
+        toc = timeit.default_timer()
+        logging.info(f"Update time: {toc - tic}s")
 
     return policy
 
@@ -303,11 +319,11 @@ def evaluate_agent(env, agent, seed):
             with torch.no_grad():
                 logits, _ = agent(sseq[:, -1])
                 probs = F.softmax(logits, dim=-1)[0]
-                # print(probs)
+                # logging.info(probs)
                 dist = Categorical(probs)
                 action = dist.sample()
 
-            next_obs, reward, done, _, _ = env.step(action)
+            next_obs, reward, done, _, _ = env.step(action.item())
 
             if action > 0 and action < 5:
                 total_act_steps += 1
@@ -320,17 +336,17 @@ def evaluate_agent(env, agent, seed):
                 torch.tensor(np.hstack(([obs["env"]], obs["thought"])))
             )
 
-    print("EVAL AVG REWARD: ", total_reward / num_episodes)
-    print("EVAL AVG EP LEN: ", total_steps / num_episodes)
-    print("EVAL AVG NUM ACTS: ", total_act_steps / num_episodes)
+    logging.info("EVAL AVG REWARD: ", total_reward / num_episodes)
+    logging.info("EVAL AVG EP LEN: ", total_steps / num_episodes)
+    logging.info("EVAL AVG NUM ACTS: ", total_act_steps / num_episodes)
 
 
 if __name__ == "__main__":
-
     args = parse_args()
     seed = args.seed
     model_path = args.model_path
     results_file = args.output_file
+    log_file = args.log_file
     save_path = args.model_save_path
     n_thought_states = args.n_thought_states
     n_thought_acts = args.n_thought_acts
@@ -360,6 +376,7 @@ if __name__ == "__main__":
     agent = train_rl(
         env,
         results_file,
+        log_file,
         seed,
         model_path, 
         gamma=gamma,

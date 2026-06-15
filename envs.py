@@ -156,7 +156,7 @@ class TFAugmentedFrozenLakeEnv(gym.Env):
         reward = 0.0
         if action < self.n_acts + 1:  # Environment action
             if action > 0:
-                self.env_obs, reward, terminated, truncated, _ = self.base_env.step(int(action - 1))
+                self.env_obs, reward, terminated, truncated, _ = self.base_env.step(action - 1)
                 done = terminated or truncated
             self.thought = torch.zeros(self.d_model, dtype=torch.float32)
             self.cache = {
