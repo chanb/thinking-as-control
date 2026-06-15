@@ -1,8 +1,10 @@
 """RL training code for learning to think."""
+import _pickle as pickle
 import argparse
 import copy
 import numpy as np
 import gym
+import os
 import random
 import torch
 import torch.nn as nn
@@ -76,8 +78,14 @@ def parse_args():
     parser.add_argument(
         "--gamma",
         type=float,
-        default=0.99,
+        default=1.0,
         help="Discount factor",
+    )
+
+    parser.add_argument(
+        "--use_ppo",
+        action="store_true",
+        help="Whether or not to use PPO",
     )
 
     parser.add_argument(
@@ -106,6 +114,7 @@ def train_rl(
     gamma=0.99,
     n_thought_acts=3,
     d_model=128,
+    use_ppo=False,
     save_path=None,
 ):
     device = torch.device("cpu")
@@ -124,7 +133,7 @@ def train_rl(
     vf_and_policy_optimizer = optim.Adam(policy.parameters(), lr=1e-3, weight_decay=0.02)
     vf_optimizer = optim.Adam(policy.parameters(), lr=1e-3, weight_decay=0.0)
 
-    USE_PPO = False
+    num_updates = 3 if use_ppo else 1
     num_episodes = 100
     num_iterations = 200
     vf_burn_in_iters = 1
@@ -210,47 +219,48 @@ def train_rl(
             adv_mean = 0.0
             value_mean = 0.0
 
-            for states, acts, targets, returns, advs, old_logprobs, mask in loader:
-                logits, values = policy(states)
-                dist = Categorical(logits=logits)
-                logprobs = dist.log_prob(targets)
+            for grad_update in range(num_updates):
+                for states, acts, targets, returns, advs, old_logprobs, mask in loader:
+                    logits, values = policy(states)
+                    dist = Categorical(logits=logits)
+                    logprobs = dist.log_prob(targets)
 
-                # Not using baseline
-                advs = returns
+                    # Not using baseline
+                    advs = returns
 
-                binary_mask = mask.to(
-                    dtype=torch.uint8
-                )  # Or torch.int, torch.long, etc.
+                    binary_mask = mask.to(
+                        dtype=torch.uint8
+                    )  # Or torch.int, torch.long, etc.
 
-                if USE_PPO:
-                    ratio = torch.exp(logprobs - old_logprobs)
-                    surr1 = ratio * advs
-                    surr2 = torch.clamp(ratio, 0.8, 1.2) * advs
-                    surr = torch.min(surr1, surr2) * binary_mask
-                else:
-                    surr = advs * logprobs * binary_mask
-                masked_squared_error = (returns - values) ** 2 * binary_mask
-                sum_masked_squared_error = torch.sum(masked_squared_error)
-                num_non_masked_elements = binary_mask.sum()
+                    if use_ppo:
+                        ratio = torch.exp(logprobs - old_logprobs)
+                        surr1 = ratio * advs
+                        surr2 = torch.clamp(ratio, 0.8, 1.2) * advs
+                        surr = torch.min(surr1, surr2) * binary_mask
+                    else:
+                        surr = advs * logprobs * binary_mask
+                    masked_squared_error = (returns - values) ** 2 * binary_mask
+                    sum_masked_squared_error = torch.sum(masked_squared_error)
+                    num_non_masked_elements = binary_mask.sum()
 
-                if num_non_masked_elements == 0:
-                    mse_loss = torch.tensor(0.0)
-                else:
-                    mse_loss = sum_masked_squared_error / num_non_masked_elements
+                    if num_non_masked_elements == 0:
+                        mse_loss = torch.tensor(0.0)
+                    else:
+                        mse_loss = sum_masked_squared_error / num_non_masked_elements
 
-                if vf_burn_in_iters > 0 and itr == 0:
-                    loss = mse_loss
-                    optimizer = vf_optimizer
-                    print("Value Loss", loss.item())
-                else:
-                    loss = -(surr.sum() / num_non_masked_elements) + mse_loss
-                    optimizer = vf_and_policy_optimizer
+                    if vf_burn_in_iters > 0 and itr == 0:
+                        loss = mse_loss
+                        optimizer = vf_optimizer
+                        print("Value Loss", loss.item())
+                    else:
+                        loss = -(surr.sum() / num_non_masked_elements) + mse_loss
+                        optimizer = vf_and_policy_optimizer
 
-                total_mse += mse_loss.item()
-                value_mean += values.mean().item()
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
+                    total_mse += mse_loss.item()
+                    value_mean += values.mean().item()
+                    optimizer.zero_grad()
+                    loss.backward()
+                    optimizer.step()
 
         np.save(f"{output_file}.npy", rewards)
         np.save(f"{output_file}-thinkactions.npy", frac_thinking_actions)
@@ -311,7 +321,13 @@ if __name__ == "__main__":
     n_thought_acts = args.n_thought_acts
     d_model = args.d_model
     gamma = args.gamma
+    use_ppo = args.use_ppo
     env = args.env
+
+    pickle.dump(
+        args,
+        open(f"{results_file}_{seed}-args.pkl", "wb")
+    )
 
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -365,6 +381,7 @@ if __name__ == "__main__":
         gamma=gamma,
         n_thought_acts=n_thought_acts,
         d_model=d_model,
+        use_ppo=use_ppo,
         save_path=save_path,
     )
     evaluate_agent(eval_env, agent, n_thought_acts, d_model, seed + 1)
