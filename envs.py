@@ -96,7 +96,7 @@ class TFAugmentedFrozenLakeEnv(gym.Env):
             map_name="4x4",
             is_slippery=False,
             success_rate=1.0/3.0,
-            reward_schedule=(1, 0, 0),
+            reward_schedule=(1, -1, 0),
             max_episode_steps=-1,
         )
 

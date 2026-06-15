@@ -78,7 +78,7 @@ def parse_args():
     parser.add_argument(
         "--gamma",
         type=float,
-        default=1.0,
+        default=0.99,
         help="Discount factor",
     )
 
@@ -140,6 +140,8 @@ def train_rl(
     num_iterations = 200
     vf_burn_in_iters = 1
     rewards = np.zeros(num_iterations)
+    reach_count = 0
+    hole_count = 0
     frac_thinking_actions = np.zeros(num_iterations)
     rng = np.random.RandomState(seed)
 
@@ -150,7 +152,7 @@ def train_rl(
         action_counts = np.zeros(5 + n_thought_acts)
 
         # 1. Collect data
-        for episode in tqdm(range(num_episodes)):
+        for episode in range(num_episodes):
             obs, _ = env.reset(rng.randint(0, 2 ** 10))
             done = False
 
@@ -175,6 +177,8 @@ def train_rl(
                 with torch.no_grad():
                     logits, value = policy(sseq[:, -1])
                     probs = F.softmax(logits, dim=-1)[0]
+                    # print(sseq[:, -1])
+                    # print(probs)
                     # print(probs)
                     dist = Categorical(probs)
                     action = dist.sample()
@@ -193,6 +197,12 @@ def train_rl(
                     torch.tensor(np.hstack((obs["env"], obs["thought"])), device=device)
                 )
 
+                if done:
+                    if reward > 0:
+                        reach_count += 1
+                    elif reward < 0:
+                        hole_count += 1
+
             sseq = torch.stack(state_seq)
             aseq = torch.stack(action_seq)
             log_prob_seq = torch.tensor(log_probs)
@@ -202,7 +212,7 @@ def train_rl(
         frac_thinking_actions[itr] = action_counts[5:].sum() / action_counts.sum()
         rewards[itr] = total_reward / num_episodes
         print(
-            f"Iter {itr}: Avg Return = {rewards[itr]}, Frac Thinking = {frac_thinking_actions[itr]}"
+            f"Iter {itr}: Avg Return = {rewards[itr]}, Frac Thinking = {frac_thinking_actions[itr]}, Reach: {reach_count}, Hole: {hole_count}"
         )
 
         dataset = RLDataset(episodes)
@@ -285,7 +295,7 @@ def evaluate_agent(env, agent, seed):
         obs, _ = env.reset(rng.randint(0, 2 ** 10))
         done = False
 
-        state_seq = [torch.tensor(np.hstack(([obs["env"]], obs["thought"])), device=device)]
+        state_seq = [torch.tensor(np.hstack(([obs["env"]], obs["thought"])))]
         action_seq = [torch.tensor(0)]
         while not done:
             sseq = torch.stack(state_seq).unsqueeze(0)
