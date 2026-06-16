@@ -154,7 +154,7 @@ def train_rl(
 
     beta_coef = 1e-2 if algo == "ppo:reverse_kl" else 0.0
     num_episodes = 50
-    num_iterations = 1000
+    num_iterations = 300
     vf_burn_in_iters = int(algo != "reinforce")
     lam = 0.95 if algo.startswith("ppo:") else 1.0
     rewards = np.zeros(num_iterations)
@@ -418,7 +418,7 @@ def evaluate_agent(env, agent, seed):
                 # logging.info(probs)
                 # dist = Categorical(probs)
                 # action = dist.sample()
-                action = torch.argmax(logits, axis=-1)
+                action = torch.argmax(logits, dim=-1)
 
             next_obs, reward, terminated, truncated, _ = env.step(action.item())
             done = terminated or truncated
