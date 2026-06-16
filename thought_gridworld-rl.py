@@ -295,12 +295,14 @@ def train_rl(
                     elif algo == "ac":
                         surr = advs * logprobs * binary_mask
 
-                    log_ratios = old_logprobs - logprobs
+                    log_ratios = (old_logprobs - logprobs) * binary_mask
                     reverse_kl = torch.exp(log_ratios) - 1 - log_ratios
-                    reverse_kl = torch.where(binary_mask, reverse_kl, 0)
+                    reverse_kl = torch.where(reverse_kl.isinf(), 0, reverse_kl) * binary_mask
                     reverse_kl = reverse_kl.sum() / num_non_masked_elements
+
                     
                     surr = surr.sum() / num_non_masked_elements
+                    # print(reverse_kl, surr)
                     ent = (entropy * binary_mask).sum() / num_non_masked_elements
                     masked_squared_error = (returns - values) ** 2 * binary_mask
                     sum_masked_squared_error = torch.sum(masked_squared_error)
@@ -313,9 +315,11 @@ def train_rl(
                     if vf_burn_in_iters > 0 and itr == 0:
                         loss = mse_loss
                         optimizer = vf_optimizer
+                        # print("VF", loss)
                     else:
                         loss = -surr + beta_coef * reverse_kl + mse_loss
                         optimizer = vf_and_policy_optimizer
+                        # print("VF & PI", loss)
 
                     surr_mean += surr.item() / num_updates
                     reverse_kl_mean += reverse_kl.item() / num_updates
@@ -324,6 +328,8 @@ def train_rl(
                     value_mean += ((values * binary_mask).sum() / num_non_masked_elements).item() / num_updates
                     adv_mean += ((advs * binary_mask).sum() / num_non_masked_elements).item() / num_updates
                     optimizer.zero_grad()
+                    # import ipdb
+                    # ipdb.set_trace()
                     loss.backward()
                     optimizer.step()
 
