@@ -88,7 +88,7 @@ def parse_args():
     parser.add_argument(
         "--algo",
         type=str,
-        choices=["reinforce", "ppo", "ac"],
+        choices=["reinforce", "ppo:clip", "ppo:reverse_kl", "ac"],
         help="Algorithm to use",
     )
 
@@ -152,11 +152,11 @@ def train_rl(
     vf_and_policy_optimizer = optim.SGD(policy.parameters(), lr=1e-1, weight_decay=0.0)
     vf_optimizer = optim.SGD(policy.parameters(), lr=1e-1, weight_decay=0.0)
 
-    entropy_coef = 0.01
+    beta_coef = 1e-2 if algo == "ppo:reverse_kl" else 0.0
     num_episodes = 50
     num_iterations = 1000
     vf_burn_in_iters = int(algo != "reinforce")
-    lam = 0.95 if algo == "ppo" else 1.0
+    lam = 0.95 if algo.startswith("ppo:") else 1.0
     rewards = np.zeros(num_iterations)
     frac_thinking_actions = np.zeros(num_iterations)
     rng = np.random.RandomState(seed)
@@ -165,7 +165,7 @@ def train_rl(
         if vf_burn_in_iters > 0 and itr == 0:
             num_updates = 1
         else:
-            num_updates = 3 if algo == "ppo" else 1
+            num_updates = 3 if algo.startswith("ppo:") else 1
         tic = timeit.default_timer()
         episodes = []
         reach_count = 0
@@ -265,6 +265,7 @@ def train_rl(
             adv_mean = 0.0
             value_mean = 0.0
             surr_mean = 0.0
+            reverse_kl_mean = 0.0
             ent_mean = 0.0
             mse_mean = 0.0
 
@@ -280,15 +281,24 @@ def train_rl(
                     )  # Or torch.int, torch.long, etc.
                     num_non_masked_elements = binary_mask.sum()
 
-                    if algo == "ppo":
+                    if algo == "ppo:clip":
                         ratio = torch.exp(logprobs - old_logprobs)
                         surr1 = ratio * advs
                         surr2 = torch.clamp(ratio, 0.8, 1.2) * advs
                         surr = torch.min(surr1, surr2) * binary_mask
+                    elif algo == "ppo:reverse_kl":
+                        ratio = torch.exp(logprobs - old_logprobs)
+                        ratio = torch.where(ratio.isinf(), 0.0, ratio)
+                        surr = ratio * advs * binary_mask
                     elif algo == "reinforce":
                         surr = returns * logprobs * binary_mask
                     elif algo == "ac":
                         surr = advs * logprobs * binary_mask
+
+                    log_ratios = old_logprobs - logprobs
+                    reverse_kl = torch.exp(log_ratios) - 1 - log_ratios
+                    reverse_kl = torch.where(binary_mask, reverse_kl, 0)
+                    reverse_kl = reverse_kl.sum() / num_non_masked_elements
                     
                     surr = surr.sum() / num_non_masked_elements
                     ent = (entropy * binary_mask).sum() / num_non_masked_elements
@@ -304,10 +314,11 @@ def train_rl(
                         loss = mse_loss
                         optimizer = vf_optimizer
                     else:
-                        loss = -surr - entropy_coef * ent + mse_loss
+                        loss = -surr + beta_coef * reverse_kl + mse_loss
                         optimizer = vf_and_policy_optimizer
 
                     surr_mean += surr.item() / num_updates
+                    reverse_kl_mean += reverse_kl.item() / num_updates
                     ent_mean += ent.item() / num_updates
                     mse_mean += mse_loss.item() / num_updates
                     value_mean += ((values * binary_mask).sum() / num_non_masked_elements).item() / num_updates
@@ -339,8 +350,9 @@ def train_rl(
             "Value",
             "Adv",
             "Ent",
-            "PolLoss",
-            "ValLoss",
+            "Pi Loss",
+            "Reverse KL",
+            "V Loss",
         ]
 
         table = [[
@@ -360,6 +372,7 @@ def train_rl(
             f"{adv_mean:.4f}",
             f"{ent_mean:.4f}",
             f"{surr_mean:.4f}",
+            f"{reverse_kl_mean:.4f}",
             f"{mse_mean:.4f}",
         ]]
 
