@@ -92,7 +92,8 @@ class TFAugmentedFrozenLakeEnv(gym.Env):
         self.d_model = d_model
         self.base_env = gym.make(
             'FrozenLake-v1',
-            desc=["SFFF", "HHFH", "FFFH", "HFFG"],
+            # desc=["SFFF", "HHFH", "FFFH", "HFFG"],
+            desc=None,
             map_name="4x4",
             is_slippery=False,
             success_rate=1.0/3.0,

@@ -146,11 +146,11 @@ def train_rl(
         ).to(device)
         # policy.apply(init_weights)
 
-    # vf_and_policy_optimizer = optim.Adam(policy.parameters(), lr=1e-3, weight_decay=0.0)
-    # vf_optimizer = optim.Adam(policy.parameters(), lr=1e-3, weight_decay=0.0)
+    vf_and_policy_optimizer = optim.Adam(policy.parameters(), lr=1e-2, weight_decay=0.0)
+    vf_optimizer = optim.Adam(policy.parameters(), lr=1e-2, weight_decay=0.0)
 
-    vf_and_policy_optimizer = optim.SGD(policy.parameters(), lr=1e-1, weight_decay=0.0)
-    vf_optimizer = optim.SGD(policy.parameters(), lr=1e-1, weight_decay=0.0)
+    # vf_and_policy_optimizer = optim.SGD(policy.parameters(), lr=1e-1, weight_decay=0.0)
+    # vf_optimizer = optim.SGD(policy.parameters(), lr=1e-1, weight_decay=0.0)
 
     beta_coef = 1e-2 if algo == "ppo:reverse_kl" else 0.0
     num_episodes = 50
@@ -297,8 +297,10 @@ def train_rl(
 
                     log_ratios = (old_logprobs - logprobs) * binary_mask
                     reverse_kl = torch.exp(log_ratios) - 1 - log_ratios
+                    # print(reverse_kl.max())
                     reverse_kl = torch.where(reverse_kl.isinf(), 0, reverse_kl) * binary_mask
                     reverse_kl = reverse_kl.sum() / num_non_masked_elements
+                    # print(reverse_kl)
 
                     
                     surr = surr.sum() / num_non_masked_elements
