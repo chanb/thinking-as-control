@@ -9,6 +9,7 @@ import torch
 import torch.optim as optim
 import torch.nn.functional as F
 
+from tabulate import tabulate
 from torch.distributions import Categorical
 from torch.utils.data import DataLoader
 from tqdm import tqdm
@@ -169,12 +170,12 @@ def train_rl(
         episodes = []
         reach_count = 0
         hole_count = 0
-        total_reward = 0.0
-        total_steps = 0
+        ep_rewards = np.zeros(num_episodes)
+        ep_lens = np.zeros(num_episodes, dtype=int)
         action_counts = np.zeros(5 + n_thought_acts)
 
         # 1. Collect data
-        for episode in range(num_episodes):
+        for ep_i in range(num_episodes):
             obs, _ = env.reset(rng.randint(0, 2 ** 10))
             done = False
 
@@ -208,10 +209,11 @@ def train_rl(
                     values.append(value[0].item())
                     action_counts[action.item()] += 1
 
-                next_obs, reward, done, _, _ = env.step(action.item())
+                next_obs, reward, terminated, truncated, _ = env.step(action.item())
+                done = terminated or truncated
 
-                total_reward += reward
-                total_steps += 1
+                ep_rewards[ep_i] += reward
+                ep_lens[ep_i] += 1
                 rew_seq.append(reward)
                 obs = next_obs
                 timestep += 1
@@ -226,24 +228,24 @@ def train_rl(
                     elif reward <= 0 and timestep < max_steps:
                         hole_count += 1
 
+                    if truncated:
+                        with torch.no_grad():
+                            sseq = torch.stack(state_seq).unsqueeze(0)
+                            _, next_value = policy(sseq[:, -1])
+                            next_value = next_value.detach().item()
+                    else:
+                        next_value = 0
+
             sseq = torch.stack(state_seq)
             aseq = torch.stack(action_seq)
             log_prob_seq = torch.tensor(log_probs)
-            returns, advs = compute_returns_and_advantages(rew_seq, values, gamma=gamma, lam=lam)
+            returns, advs = compute_returns_and_advantages(rew_seq, values, gamma=gamma, lam=lam, next_value=next_value)
             episodes.append((sseq, aseq, returns, advs, log_prob_seq))
             # assert episode < 2
         frac_thinking_actions[itr] = action_counts[5:].sum() / action_counts.sum()
-        rewards[itr] = total_reward / num_episodes
+        rewards[itr] = np.mean(ep_rewards)
         toc = timeit.default_timer()
-        logging.info(
-            f"Iter {itr}: Rollout = {toc - tic:.2f}s, Avg Return = {rewards[itr]}, Reach = {reach_count / num_episodes}, Hole = {hole_count / num_episodes}, Avg Ep Len = {total_steps / num_episodes}"
-        )
-        logging.info(
-            f"Frac Thinking = {frac_thinking_actions[itr]}, Act counts = {action_counts / action_counts.sum()}"
-        )
-        if num_episodes == 1:
-            logging.info(f"Action traj = {[act.item() for act in action_seq]}")
-            # print([(params, params.shape) for params in policy.policy_head.parameters()])
+        rollout_time = toc - tic
 
         tic = timeit.default_timer()
         dataset = RLDataset(episodes)
@@ -260,9 +262,11 @@ def train_rl(
 
         for epoch in range(num_epochs):
 
-            total_mse = 0.0
             adv_mean = 0.0
             value_mean = 0.0
+            surr_mean = 0.0
+            ent_mean = 0.0
+            mse_mean = 0.0
 
             for grad_update in range(num_updates):
                 for states, acts, targets, returns, advs, old_logprobs, mask in loader:
@@ -271,15 +275,10 @@ def train_rl(
                     logprobs = dist.log_prob(targets)
                     entropy = dist.entropy()
 
-                    # Not using baseline
-                    # advs = returns
-
                     binary_mask = mask.to(
                         dtype=torch.uint8
                     )  # Or torch.int, torch.long, etc.
-
-                    # import ipdb
-                    # ipdb.set_trace()
+                    num_non_masked_elements = binary_mask.sum()
 
                     if algo == "ppo":
                         ratio = torch.exp(logprobs - old_logprobs)
@@ -290,9 +289,11 @@ def train_rl(
                         surr = returns * logprobs * binary_mask
                     elif algo == "ac":
                         surr = advs * logprobs * binary_mask
+                    
+                    surr = surr.sum() / num_non_masked_elements
+                    ent = (entropy * binary_mask).sum() / num_non_masked_elements
                     masked_squared_error = (returns - values) ** 2 * binary_mask
                     sum_masked_squared_error = torch.sum(masked_squared_error)
-                    num_non_masked_elements = binary_mask.sum()
 
                     if algo == "reinforce" or num_non_masked_elements == 0:
                         mse_loss = torch.tensor(0.0)
@@ -302,17 +303,15 @@ def train_rl(
                     if vf_burn_in_iters > 0 and itr == 0:
                         loss = mse_loss
                         optimizer = vf_optimizer
-                        logging.info(f"Value Loss: {loss.item():.4f}")
                     else:
-                        # print(entropy, binary_mask)
-                        ent = entropy_coef * entropy * binary_mask
-                        loss = -((surr - ent).sum() / num_non_masked_elements) + mse_loss
+                        loss = -surr - entropy_coef * ent + mse_loss
                         optimizer = vf_and_policy_optimizer
-                        logging.info(f"Return: {returns[:, 0].mean()}")
-                        logging.info(f"Entropy: {(ent.sum() / num_non_masked_elements).item():.4f}, Policy Loss: {(surr.sum() / num_non_masked_elements).item():.4f}, Value Loss: {mse_loss.item():.4f}")
 
-                    total_mse += mse_loss.item()
-                    value_mean += values.mean().item()
+                    surr_mean += surr.item() / num_updates
+                    ent_mean += ent.item() / num_updates
+                    mse_mean += mse_loss.item() / num_updates
+                    value_mean += ((values * binary_mask).sum() / num_non_masked_elements).item() / num_updates
+                    adv_mean += ((advs * binary_mask).sum() / num_non_masked_elements).item() / num_updates
                     optimizer.zero_grad()
                     loss.backward()
                     optimizer.step()
@@ -322,7 +321,54 @@ def train_rl(
         if save_path is not None:
             torch.save(policy, save_path)
         toc = timeit.default_timer()
-        logging.info(f"Update time: {toc - tic}s")
+        update_time = toc - tic
+
+        headers = [
+            "Itr",
+            "Roll(s)",
+            "Ret μ",
+            "Ret min",
+            "Ret max",
+            "Reach",
+            "Hole",
+            "Len μ",
+            "Len min",
+            "Len max",
+            "Think",
+            "Ent",
+            "PolLoss",
+            "ValLoss",
+        ]
+
+        table = [[
+            itr,
+            f"{rollout_time:.2f}",
+            f"{ep_rewards.mean():.3f}",
+            f"{ep_rewards.min():.3f}",
+            f"{ep_rewards.max():.3f}",
+            f"{reach_count / num_episodes:.4f}",
+            f"{hole_count / num_episodes:.4f}",
+            f"{ep_lens.mean():.1f}",
+            f"{ep_lens.min()}",
+            f"{ep_lens.max()}",
+            f"{frac_thinking_actions[itr]:.4f}",
+            f"{returns[:,0].mean():.4f}",
+            f"{update_time:.2f}",
+            f"{value_mean:.4f}",
+            f"{adv_mean:.4f}",
+            f"{ent_mean:.4f}",
+            f"{surr_mean:.4f}",
+            f"{mse_mean:.4f}",
+        ]]
+
+        logging.info(
+            "\n" + tabulate(table, headers=headers, tablefmt="simple")
+            + "\n" + tabulate(
+                [[f"{p:.4f}" for i, p in enumerate(action_counts / action_counts.sum())]],
+                headers=[f"Act: {act_i}" for act_i in range(len(action_counts))],
+                tablefmt="grid",
+            )
+        )
 
     return policy
 
@@ -351,7 +397,8 @@ def evaluate_agent(env, agent, seed):
                 # action = dist.sample()
                 action = torch.argmax(logits, axis=-1)
 
-            next_obs, reward, done, _, _ = env.step(action.item())
+            next_obs, reward, terminated, truncated, _ = env.step(action.item())
+            done = terminated or truncated
 
             if action > 0 and action < 5:
                 total_act_steps += 1

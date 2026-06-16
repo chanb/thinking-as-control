@@ -152,12 +152,12 @@ class TFAugmentedFrozenLakeEnv(gym.Env):
     def step(self, action):
         self.steps += 1
 
-        done = False
+        truncated = False
+        terminated = False
         reward = 0.0
         if action < self.n_acts + 1:  # Environment action
             if action > 0:
                 self.env_obs, reward, terminated, truncated, _ = self.base_env.step(action - 1)
-                done = terminated or truncated
             self.thought = torch.zeros(self.d_model, dtype=torch.float32)
             self.cache = {
                 "l1": None,
@@ -189,6 +189,6 @@ class TFAugmentedFrozenLakeEnv(gym.Env):
             obs = self._get_obs()
 
         if self.steps >= self.max_steps:
-            done = True
+            truncated = True
 
-        return obs, reward, done, False, {}
+        return obs, reward, terminated, truncated, {}

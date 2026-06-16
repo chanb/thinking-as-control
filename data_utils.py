@@ -86,11 +86,10 @@ def rl_collate_fn(batch):
     return states_pad, actions_pad, ys_pad, returns_pad, advs_pad, log_probs_pad, mask
 
 
-def compute_returns_and_advantages(rewards, values, gamma=0.99, lam=0.95):
+def compute_returns_and_advantages(rewards, values, gamma=0.99, lam=0.95, next_value=0):
     returns = np.zeros(len(rewards))
     advs = np.zeros_like(returns)
     gae = 0
-    next_value = 0
 
     for t in reversed(range(len(rewards))):
         delta = rewards[t] + gamma * next_value - values[t]
