@@ -14,7 +14,7 @@ class ThoughtMLP(nn.Module):
         super().__init__()
         self.d_model = d_model
         vocab_size = n_acts + 1 + n_thought_acts  # 1 padding action, environment and thought actions
-        self.policy_head = nn.Linear(obs_dim + d_model, vocab_size)
+        self.policy_head = nn.Linear(obs_dim + d_model, vocab_size, bias=False)
         self.value_head = nn.Linear(obs_dim + d_model, 1)
         self.temperature = torch.tensor(1.0)
         self.action_mask = ~torch.tensor([0] + [1] * (n_acts + n_thought_acts)).bool()

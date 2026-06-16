@@ -73,7 +73,7 @@ def parse_args():
     parser.add_argument(
         "--max_steps",
         type=int,
-        default=50,
+        default=30,
         help="Maximum environment steps",
     )
 
@@ -85,9 +85,10 @@ def parse_args():
     )
 
     parser.add_argument(
-        "--use_ppo",
-        action="store_true",
-        help="Whether or not to use PPO",
+        "--algo",
+        type=str,
+        choices=["reinforce", "ppo", "ac"],
+        help="Algorithm to use",
     )
 
     parser.add_argument(
@@ -124,7 +125,7 @@ def train_rl(
     gamma,
     n_thought_acts,
     d_model,
-    use_ppo,
+    algo,
     save_path=None,
 ):
     device = torch.device("cpu")
@@ -142,25 +143,34 @@ def train_rl(
             n_thought_acts=n_thought_acts,
             d_model=d_model,
         ).to(device)
-        policy.apply(init_weights)
+        # policy.apply(init_weights)
 
-    vf_and_policy_optimizer = optim.Adam(policy.parameters(), lr=1e-3, weight_decay=0.02)
-    vf_optimizer = optim.Adam(policy.parameters(), lr=1e-3, weight_decay=0.0)
+    # vf_and_policy_optimizer = optim.Adam(policy.parameters(), lr=1e-3, weight_decay=0.0)
+    # vf_optimizer = optim.Adam(policy.parameters(), lr=1e-3, weight_decay=0.0)
 
-    num_updates = 3 if use_ppo else 1
-    num_episodes = 100
-    num_iterations = 200
-    vf_burn_in_iters = 1
+    vf_and_policy_optimizer = optim.SGD(policy.parameters(), lr=1e-1, weight_decay=0.0)
+    vf_optimizer = optim.SGD(policy.parameters(), lr=1e-1, weight_decay=0.0)
+
+    entropy_coef = 0.01
+    num_episodes = 50
+    num_iterations = 1000
+    vf_burn_in_iters = int(algo != "reinforce")
+    lam = 0.95 if algo == "ppo" else 1.0
     rewards = np.zeros(num_iterations)
     frac_thinking_actions = np.zeros(num_iterations)
     rng = np.random.RandomState(seed)
 
     for itr in range(num_iterations):
+        if vf_burn_in_iters > 0 and itr == 0:
+            num_updates = 1
+        else:
+            num_updates = 3 if algo == "ppo" else 1
         tic = timeit.default_timer()
         episodes = []
         reach_count = 0
         hole_count = 0
         total_reward = 0.0
+        total_steps = 0
         action_counts = np.zeros(5 + n_thought_acts)
 
         # 1. Collect data
@@ -201,6 +211,7 @@ def train_rl(
                 next_obs, reward, done, _, _ = env.step(action.item())
 
                 total_reward += reward
+                total_steps += 1
                 rew_seq.append(reward)
                 obs = next_obs
                 timestep += 1
@@ -210,23 +221,29 @@ def train_rl(
                 )
 
                 if done:
-                    if reward > 0:
+                    if reward >= 1.0:
                         reach_count += 1
-                    elif reward < 0:
+                    elif reward <= 0 and timestep < max_steps:
                         hole_count += 1
 
             sseq = torch.stack(state_seq)
             aseq = torch.stack(action_seq)
             log_prob_seq = torch.tensor(log_probs)
-            returns, advs = compute_returns_and_advantages(rew_seq, values, gamma=gamma)
+            returns, advs = compute_returns_and_advantages(rew_seq, values, gamma=gamma, lam=lam)
             episodes.append((sseq, aseq, returns, advs, log_prob_seq))
             # assert episode < 2
         frac_thinking_actions[itr] = action_counts[5:].sum() / action_counts.sum()
         rewards[itr] = total_reward / num_episodes
         toc = timeit.default_timer()
         logging.info(
-            f"Iter {itr}: Rollout = {toc - tic}s, Avg Return = {rewards[itr]}, Frac Thinking = {frac_thinking_actions[itr]}, Reach = {reach_count / num_episodes}, Hole = {hole_count / num_episodes}"
+            f"Iter {itr}: Rollout = {toc - tic:.2f}s, Avg Return = {rewards[itr]}, Reach = {reach_count / num_episodes}, Hole = {hole_count / num_episodes}, Avg Ep Len = {total_steps / num_episodes}"
         )
+        logging.info(
+            f"Frac Thinking = {frac_thinking_actions[itr]}, Act counts = {action_counts / action_counts.sum()}"
+        )
+        if num_episodes == 1:
+            logging.info(f"Action traj = {[act.item() for act in action_seq]}")
+            # print([(params, params.shape) for params in policy.policy_head.parameters()])
 
         tic = timeit.default_timer()
         dataset = RLDataset(episodes)
@@ -252,26 +269,32 @@ def train_rl(
                     logits, values = policy(states)
                     dist = Categorical(logits=logits)
                     logprobs = dist.log_prob(targets)
+                    entropy = dist.entropy()
 
                     # Not using baseline
-                    advs = returns
+                    # advs = returns
 
                     binary_mask = mask.to(
                         dtype=torch.uint8
                     )  # Or torch.int, torch.long, etc.
 
-                    if use_ppo:
+                    # import ipdb
+                    # ipdb.set_trace()
+
+                    if algo == "ppo":
                         ratio = torch.exp(logprobs - old_logprobs)
                         surr1 = ratio * advs
                         surr2 = torch.clamp(ratio, 0.8, 1.2) * advs
                         surr = torch.min(surr1, surr2) * binary_mask
-                    else:
+                    elif algo == "reinforce":
+                        surr = returns * logprobs * binary_mask
+                    elif algo == "ac":
                         surr = advs * logprobs * binary_mask
                     masked_squared_error = (returns - values) ** 2 * binary_mask
                     sum_masked_squared_error = torch.sum(masked_squared_error)
                     num_non_masked_elements = binary_mask.sum()
 
-                    if num_non_masked_elements == 0:
+                    if algo == "reinforce" or num_non_masked_elements == 0:
                         mse_loss = torch.tensor(0.0)
                     else:
                         mse_loss = sum_masked_squared_error / num_non_masked_elements
@@ -279,10 +302,14 @@ def train_rl(
                     if vf_burn_in_iters > 0 and itr == 0:
                         loss = mse_loss
                         optimizer = vf_optimizer
-                        logging.info(f"Value Loss: {loss.item()}")
+                        logging.info(f"Value Loss: {loss.item():.4f}")
                     else:
-                        loss = -(surr.sum() / num_non_masked_elements) + mse_loss
+                        # print(entropy, binary_mask)
+                        ent = entropy_coef * entropy * binary_mask
+                        loss = -((surr - ent).sum() / num_non_masked_elements) + mse_loss
                         optimizer = vf_and_policy_optimizer
+                        logging.info(f"Return: {returns[:, 0].mean()}")
+                        logging.info(f"Entropy: {(ent.sum() / num_non_masked_elements).item():.4f}, Policy Loss: {(surr.sum() / num_non_masked_elements).item():.4f}, Value Loss: {mse_loss.item():.4f}")
 
                     total_mse += mse_loss.item()
                     value_mean += values.mean().item()
@@ -311,17 +338,18 @@ def evaluate_agent(env, agent, seed):
         obs, _ = env.reset(rng.randint(0, 2 ** 10))
         done = False
 
-        state_seq = [torch.tensor(np.hstack(([obs["env"]], obs["thought"])))]
+        state_seq = [torch.tensor(np.hstack((obs["env"], obs["thought"])))]
         action_seq = [torch.tensor(0)]
         while not done:
             sseq = torch.stack(state_seq).unsqueeze(0)
 
             with torch.no_grad():
                 logits, _ = agent(sseq[:, -1])
-                probs = F.softmax(logits, dim=-1)[0]
+                # probs = F.softmax(logits, dim=-1)[0]
                 # logging.info(probs)
-                dist = Categorical(probs)
-                action = dist.sample()
+                # dist = Categorical(probs)
+                # action = dist.sample()
+                action = torch.argmax(logits, axis=-1)
 
             next_obs, reward, done, _, _ = env.step(action.item())
 
@@ -333,12 +361,12 @@ def evaluate_agent(env, agent, seed):
             obs = next_obs
             action_seq.append(action)
             state_seq.append(
-                torch.tensor(np.hstack(([obs["env"]], obs["thought"])))
+                torch.tensor(np.hstack((obs["env"], obs["thought"])))
             )
 
-    logging.info("EVAL AVG REWARD: ", total_reward / num_episodes)
-    logging.info("EVAL AVG EP LEN: ", total_steps / num_episodes)
-    logging.info("EVAL AVG NUM ACTS: ", total_act_steps / num_episodes)
+    logging.info(f"EVAL AVG REWARD: {total_reward / num_episodes}")
+    logging.info(f"EVAL AVG EP LEN: {total_steps / num_episodes}")
+    logging.info(f"EVAL AVG NUM ACTS: {total_act_steps / num_episodes}")
 
 
 if __name__ == "__main__":
@@ -352,7 +380,7 @@ if __name__ == "__main__":
     n_thought_acts = args.n_thought_acts
     d_model = args.d_model
     gamma = args.gamma
-    use_ppo = args.use_ppo
+    algo = args.algo
     tabular = args.tabular
     max_steps = args.max_steps
 
@@ -382,7 +410,7 @@ if __name__ == "__main__":
         gamma=gamma,
         n_thought_acts=n_thought_acts,
         d_model=d_model,
-        use_ppo=use_ppo,
+        algo=algo,
         save_path=save_path,
     )
     evaluate_agent(env, agent, seed + 1)

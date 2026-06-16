@@ -92,11 +92,11 @@ class TFAugmentedFrozenLakeEnv(gym.Env):
         self.d_model = d_model
         self.base_env = gym.make(
             'FrozenLake-v1',
-            desc=None,
+            desc=["SFFF", "HHFH", "FFFH", "HFFG"],
             map_name="4x4",
             is_slippery=False,
             success_rate=1.0/3.0,
-            reward_schedule=(1, -1, 0),
+            reward_schedule=(1, 0, 0),
             max_episode_steps=-1,
         )
 
