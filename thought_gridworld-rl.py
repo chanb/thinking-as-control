@@ -93,6 +93,13 @@ def parse_args():
     )
 
     parser.add_argument(
+        "--num_iterations",
+        type=int,
+        default=300,
+        help="Number of iterations (default: 300)",
+    )
+
+    parser.add_argument(
         "--seed",
         type=int,
         default=42,
@@ -120,20 +127,18 @@ def parse_args():
 def train_rl(
     env,
     output_file_base,
-    log_file_base,
     seed,
     model_path,
     gamma,
     n_thought_acts,
     d_model,
     algo,
+    num_iterations=300,
     save_path=None,
 ):
     device = torch.device("cpu")
 
     output_file = f"{output_file_base}_{seed}"
-    log_file = f"{log_file_base}_{seed}"
-    logging.basicConfig(filename=f"{log_file}.log", level=logging.INFO)
 
     if model_path is not None:
         policy = torch.load(model_path, weights_only=False)
@@ -154,13 +159,14 @@ def train_rl(
 
     beta_coef = 1e-2 if algo == "ppo:reverse_kl" else 0.0
     num_episodes = 50
-    num_iterations = 300
     vf_burn_in_iters = int(algo != "reinforce")
     lam = 0.95 if algo.startswith("ppo:") else 1.0
     rewards = np.zeros(num_iterations)
     frac_thinking_actions = np.zeros(num_iterations)
     rng = np.random.RandomState(seed)
 
+    # state_map = dict()
+    # state_id = 0
     for itr in range(num_iterations):
         if vf_burn_in_iters > 0 and itr == 0:
             num_updates = 1
@@ -172,7 +178,8 @@ def train_rl(
         hole_count = 0
         ep_rewards = np.zeros(num_episodes)
         ep_lens = np.zeros(num_episodes, dtype=int)
-        action_counts = np.zeros(5 + n_thought_acts)
+        action_counts = np.zeros(env.n_acts + env.n_thought_acts + 1)
+        # state_counts = np.zeros(env.n_states * env.n_thought_states)
 
         # 1. Collect data
         for ep_i in range(num_episodes):
@@ -208,6 +215,13 @@ def train_rl(
                     log_probs.append(dist.log_prob(action).item())
                     values.append(value[0].item())
                     action_counts[action.item()] += 1
+
+                    # if tuple(sseq[0, -1].tolist()) not in state_map:
+                    #     state_map[tuple(sseq[0, -1].tolist())] = state_id
+                    #     state_id += 1
+
+                    # # print(len(state_counts), state_id, env.n_thought_states)
+                    # state_counts[state_map[tuple(sseq[0, -1].tolist())]] += 1
 
                 next_obs, reward, terminated, truncated, _ = env.step(action.item())
                 done = terminated or truncated
@@ -299,6 +313,9 @@ def train_rl(
                     reverse_kl = torch.exp(log_ratios) - 1 - log_ratios
                     # print(reverse_kl.max())
                     reverse_kl = torch.where(reverse_kl.isinf(), 0, reverse_kl) * binary_mask
+                    # act_mask = (targets < env.n_acts).float()
+                    # weights = act_mask + (1 - act_mask) * env.n_thought_acts / (env.n_thought_acts + env.n_acts)
+                    # reverse_kl = reverse_kl * weights
                     reverse_kl = reverse_kl.sum() / num_non_masked_elements
                     # print(reverse_kl)
 
@@ -393,6 +410,17 @@ def train_rl(
             )
         )
 
+    #     logging.info(
+    #         "\n" + tabulate(table, headers=headers, tablefmt="simple")
+    #         + "\n" + tabulate(
+    #             [[f"{p:.4f}" for i, p in enumerate(state_counts / state_counts.sum())]],
+    #             headers=[f"State: {state_i}" for state_i in range(len(state_counts))],
+    #             tablefmt="grid",
+    #         )
+    #     )
+
+    # logging.info(state_map)
+
     return policy
 
 
@@ -453,6 +481,7 @@ if __name__ == "__main__":
     algo = args.algo
     tabular = args.tabular
     max_steps = args.max_steps
+    num_iterations = args.num_iterations
 
     pickle.dump(
         args,
@@ -462,6 +491,9 @@ if __name__ == "__main__":
     np.random.seed(seed)
     torch.manual_seed(seed)
     random.seed(seed)
+
+    log_file = f"{log_file}_{seed}"
+    logging.basicConfig(filename=f"{log_file}.log", level=logging.INFO)
 
     env = TFAugmentedFrozenLakeEnv(
         n_thought_states=n_thought_states,
@@ -474,13 +506,13 @@ if __name__ == "__main__":
     agent = train_rl(
         env,
         results_file,
-        log_file,
         seed,
         model_path, 
         gamma=gamma,
         n_thought_acts=n_thought_acts,
         d_model=d_model,
         algo=algo,
+        num_iterations=num_iterations,
         save_path=save_path,
     )
     evaluate_agent(env, agent, seed + 1)
