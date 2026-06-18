@@ -364,17 +364,17 @@ class TFAugmentedFrozenLakeEnv(gym.Env):
 
         # Thought space
         self.pos_embedding = nn.Embedding(self.n_states, self.d_model)
-        self.pos_embedding.weight.data = (
-            self.pos_embedding.weight.data
-            / torch.norm(self.pos_embedding.weight.data, p=2, dim=-1, keepdim=True)
-        )
+        # self.pos_embedding.weight.data = (
+        #     self.pos_embedding.weight.data
+        #     / torch.norm(self.pos_embedding.weight.data, p=2, dim=-1, keepdim=True)
+        # )
         self.action_embedding = nn.Embedding(self.n_acts + self.n_thought_acts + 1, self.d_model, padding_idx=0)
-        self.action_embedding.weight.data = (
-            self.action_embedding.weight.data
-            / torch.norm(self.action_embedding.weight.data, p=2, dim=-1, keepdim=True)
-        )
-        self.lnorm = nn.LayerNorm(d_model)
-        self.lnorm.apply(init_weights)
+        # self.action_embedding.weight.data = (
+        #     self.action_embedding.weight.data
+        #     / torch.norm(self.action_embedding.weight.data, p=2, dim=-1, keepdim=True)
+        # )
+        # self.lnorm = nn.LayerNorm(d_model)
+        # self.lnorm.apply(init_weights)
 
         self.transformer = TwoLayerTransformer(self.d_model, n_heads=4)
         self.transformer.apply(init_weights)
@@ -383,7 +383,7 @@ class TFAugmentedFrozenLakeEnv(gym.Env):
         for module in [
             self.pos_embedding,
             self.action_embedding,
-            self.lnorm,
+            # self.lnorm,
             self.transformer,
         ]:
             for param in module.parameters():
@@ -430,22 +430,23 @@ class TFAugmentedFrozenLakeEnv(gym.Env):
             obs = self._get_obs()
 
             with torch.inference_mode():
-                self.thought, self.cache = self.transformer(
+                _, self.cache = self.transformer(
                     self.pos_embedding(torch.tensor(self.env_obs))[None, None],
                     self.cache
                 )
-                self.thought = self.thought.detach()[0, 0]
         else: # Thought action
             with torch.inference_mode():
-                self.thought, self.cache = self.transformer(
+                _, self.cache = self.transformer(
                     self.action_embedding(torch.tensor(action))[None, None],
                     self.cache,
                 )
                 self.thought, self.cache = self.transformer(
-                    self.thought,
+                    self.thought[None, None],
                     self.cache,
                 )
-                self.thought = self.lnorm(self.thought)[0, 0]
+                # self.thought = self.lnorm(self.thought)[0, 0]
+                self.thought = self.thought[0, 0]
+                self.thought = self.thought / torch.norm(self.thought, p=2, dim=-1)
             obs = self._get_obs()
 
         if self.steps >= self.max_steps:
