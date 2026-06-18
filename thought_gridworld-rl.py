@@ -231,10 +231,9 @@ def train_rl(
                 rew_seq.append(reward)
                 obs = next_obs
                 timestep += 1
+
                 action_seq.append(action)
-                state_seq.append(
-                    torch.tensor(np.hstack((obs["env"], obs["thought"])), device=device)
-                )
+                state_seq.append(torch.tensor(np.hstack((obs["env"], obs["thought"])), device=device))
 
                 if done:
                     if reward >= 1.0:
@@ -253,6 +252,28 @@ def train_rl(
             sseq = torch.stack(state_seq)
             aseq = torch.stack(action_seq)
             log_prob_seq = torch.tensor(log_probs)
+
+            # # XXX: Hindsight cycle removal
+            # match_state = torch.all(sseq[:-1] == sseq[1:], dim=-1)
+            # match_thought_act = torch.roll(torch.logical_and(aseq[:-1] == aseq[1:], aseq[1:] >= env.n_acts), -1)
+
+            # keep_mask = torch.cat((
+            #     torch.ones(1, dtype=bool),
+            #     torch.logical_not(torch.logical_and(match_state, match_thought_act))
+            # ))
+
+
+            # # print('====')
+            # # print(torch.hstack((sseq[:, :4], aseq[:, None])))
+            # # print(keep_mask)
+
+            # sseq = sseq[keep_mask]
+            # aseq = aseq[keep_mask]
+            # log_prob_seq = log_prob_seq[keep_mask[:-1]]
+            # rew_seq = torch.tensor(rew_seq)[keep_mask[:-1]]
+            # values = torch.tensor(values)[keep_mask[:-1]]
+            # # XXX: Hindsight cycle removal
+
             returns, advs = compute_returns_and_advantages(rew_seq, values, gamma=gamma, lam=lam, next_value=next_value)
             episodes.append((sseq, aseq, returns, advs, log_prob_seq))
             # assert episode < 2
@@ -363,8 +384,8 @@ def train_rl(
             "Itr",
             "Roll(s)",
             "Ret μ",
-            "Ret min",
-            "Ret max",
+            # "Ret min",
+            # "Ret max",
             "Reach",
             "Hole",
             "Len μ",
@@ -384,8 +405,8 @@ def train_rl(
             itr,
             f"{rollout_time:.2f}",
             f"{ep_rewards.mean():.3f}",
-            f"{ep_rewards.min():.3f}",
-            f"{ep_rewards.max():.3f}",
+            # f"{ep_rewards.min():.3f}",
+            # f"{ep_rewards.max():.3f}",
             f"{reach_count / num_episodes:.4f}",
             f"{hole_count / num_episodes:.4f}",
             f"{ep_lens.mean():.1f}",
