@@ -9,6 +9,26 @@ def init_weights(module):
         if module.bias is not None:
             nn.init.zeros_(module.bias)
 
+
+# def init_weights(module):
+#     # Linear layers
+#     if isinstance(module, nn.Linear):
+#         nn.init.xavier_uniform_(module.weight)
+#         if module.bias is not None:
+#             nn.init.zeros_(module.bias)
+
+#     # Multihead attention (Q, K, V projections + output proj)
+#     elif isinstance(module, nn.MultiheadAttention):
+#         nn.init.xavier_uniform_(module.in_proj_weight)
+#         if module.in_proj_bias is not None:
+#             nn.init.zeros_(module.in_proj_bias)
+
+#         nn.init.xavier_uniform_(module.out_proj.weight)
+#         if module.out_proj.bias is not None:
+#             nn.init.zeros_(module.out_proj.bias)
+
+
+
 class ThoughtMLP(nn.Module):
     def __init__(self, obs_dim, n_acts, n_thought_acts, d_model=128):
         super().__init__()

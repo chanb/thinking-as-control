@@ -93,6 +93,13 @@ def parse_args():
     )
 
     parser.add_argument(
+        "--ent_coef",
+        type=float,
+        default=0.0,
+        help="Entropy regularization term",
+    )
+
+    parser.add_argument(
         "--num_iterations",
         type=int,
         default=300,
@@ -133,6 +140,7 @@ def train_rl(
     n_thought_acts,
     d_model,
     algo,
+    ent_coef=1e-2,
     num_iterations=300,
     save_path=None,
 ):
@@ -164,6 +172,10 @@ def train_rl(
     rewards = np.zeros(num_iterations)
     frac_thinking_actions = np.zeros(num_iterations)
     rng = np.random.RandomState(seed)
+    eps = 0.0
+    explore_bonus_coef = 0.0
+    C_init_coef = 0.1
+    C = torch.eye(env.obs_dim + d_model, dtype=torch.float) * C_init_coef
 
     # state_map = dict()
     # state_id = 0
@@ -206,14 +218,21 @@ def train_rl(
 
                 with torch.no_grad():
                     logits, value = policy(sseq[:, -1])
+                    # value = torch.clamp(value.detach(), min=0.0, max=1 / (1 - gamma)).item()
+                    value = value.detach().item()
                     probs = F.softmax(logits, dim=-1)[0]
                     # logging.info(sseq[:, -1])
                     # logging.info(probs)
                     # logging.info(probs)
                     dist = Categorical(probs)
-                    action = dist.sample()
+                    if eps > 0 and rng.rand() < eps:
+                        action = torch.tensor(rng.randint(1, env.n_acts + 2))
+                        if action == env.n_acts + 1:
+                            action = action + torch.tensor(rng.randint(0, env.n_thought_acts))
+                    else:
+                        action = dist.sample()
                     log_probs.append(dist.log_prob(action).item())
-                    values.append(value[0].item())
+                    values.append(value)
                     action_counts[action.item()] += 1
 
                     # if tuple(sseq[0, -1].tolist()) not in state_map:
@@ -225,15 +244,30 @@ def train_rl(
 
                 next_obs, reward, terminated, truncated, _ = env.step(action.item())
                 done = terminated or truncated
+                next_state = torch.tensor(
+                    np.hstack((next_obs["env"], next_obs["thought"])),
+                    device=device,
+                    dtype=torch.float,
+                )
+
+                if explore_bonus_coef > 0:
+                    print(next_state)
+                    u = C @ next_state
+                    b = torch.clamp(next_state @ u, min=0.0)
+                    C = C - u @ u.T / (1 + b)
+                    print(b, C, u)
+                    reward = reward + explore_bonus_coef * b
+                    assert torch.all(torch.isfinite(b)) and torch.all(torch.isfinite(C))
 
                 ep_rewards[ep_i] += reward
                 ep_lens[ep_i] += 1
+                
                 rew_seq.append(reward)
                 obs = next_obs
                 timestep += 1
 
                 action_seq.append(action)
-                state_seq.append(torch.tensor(np.hstack((obs["env"], obs["thought"])), device=device))
+                state_seq.append(next_state)
 
                 if done:
                     if reward >= 1.0:
@@ -245,6 +279,7 @@ def train_rl(
                         with torch.no_grad():
                             sseq = torch.stack(state_seq).unsqueeze(0)
                             _, next_value = policy(sseq[:, -1])
+                            # next_value = torch.clamp(next_value.detach(), min=0.0, max=1 / (1 - gamma)).item()
                             next_value = next_value.detach().item()
                     else:
                         next_value = 0
@@ -275,6 +310,7 @@ def train_rl(
             # # XXX: Hindsight cycle removal
 
             returns, advs = compute_returns_and_advantages(rew_seq, values, gamma=gamma, lam=lam, next_value=next_value)
+            # assert torch.all(returns >= 0.0)
             episodes.append((sseq, aseq, returns, advs, log_prob_seq))
             # assert episode < 2
         frac_thinking_actions[itr] = action_counts[5:].sum() / action_counts.sum()
@@ -357,7 +393,12 @@ def train_rl(
                         optimizer = vf_optimizer
                         # print("VF", loss)
                     else:
-                        loss = -surr + beta_coef * reverse_kl + mse_loss
+                        loss = (
+                            -surr
+                            + beta_coef * reverse_kl
+                            - ent_coef * ent
+                            + mse_loss
+                        )
                         optimizer = vf_and_policy_optimizer
                         # print("VF & PI", loss)
 
@@ -393,7 +434,7 @@ def train_rl(
             "Len max",
             "Think",
             "Update(s)",
-            "Value",
+            "Pred. V",
             "Adv",
             "Ent",
             "Pi Loss",
@@ -503,6 +544,7 @@ if __name__ == "__main__":
     tabular = args.tabular
     max_steps = args.max_steps
     num_iterations = args.num_iterations
+    ent_coef = args.ent_coef
 
     pickle.dump(
         args,
@@ -533,6 +575,7 @@ if __name__ == "__main__":
         n_thought_acts=n_thought_acts,
         d_model=d_model,
         algo=algo,
+        ent_coef=ent_coef,
         num_iterations=num_iterations,
         save_path=save_path,
     )
