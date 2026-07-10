@@ -34,14 +34,14 @@ def parse_args():
         "--model_path",
         type=str,
         default=None,
-        help="Path to the pretrained PyTorch model file (.pt or .pth)",
+        help="Path to the pretrained PyTorch model file and env",
     )
 
     parser.add_argument(
         "--model_save_path",
         type=str,
         default=None,
-        help="Path to save the trained model file (.pt or .pth)",
+        help="Path to save the trained model file and env",
     )
 
     parser.add_argument(
@@ -155,7 +155,7 @@ def train_rl(
     output_file = f"{output_file_base}_{seed}"
 
     if model_path is not None:
-        policy = torch.load(model_path, weights_only=False)
+        policy = torch.load("{}.pt".format(model_path), weights_only=False)
     else:
         policy = ThoughtMLP(
             obs_dim=env.obs_dim,
@@ -423,7 +423,7 @@ def train_rl(
         np.save(f"{output_file}.npy", rewards)
         np.save(f"{output_file}-thinkactions.npy", frac_thinking_actions)
         if save_path is not None:
-            torch.save(policy, save_path)
+            torch.save(policy, "{}.pt".format(save_path))
         toc = timeit.default_timer()
         update_time = toc - tic
 
@@ -565,14 +565,20 @@ if __name__ == "__main__":
     log_file = f"{log_file}_{seed}"
     logging.basicConfig(filename=f"{log_file}.log", level=logging.INFO)
 
-    env = TFAugmentedFrozenLakeEnv(
-        n_thought_states=n_thought_states,
-        n_thought_acts=n_thought_acts,
-        d_model=d_model,
-        max_steps=max_steps,
-        tabular=tabular,
-        thought_per_state=thought_per_state,
-    )
+    if model_path is not None:
+        env = pickle.load(open("{}-env.pkl".format(model_path), "rb"))
+    else:
+        env = TFAugmentedFrozenLakeEnv(
+            n_thought_states=n_thought_states,
+            n_thought_acts=n_thought_acts,
+            d_model=d_model,
+            max_steps=max_steps,
+            tabular=tabular,
+            thought_per_state=thought_per_state,
+        )
+
+    if save_path is not None:
+        pickle.dump(env, open("{}-env.pkl".format(save_path), "wb"))
 
     agent = train_rl(
         env,
