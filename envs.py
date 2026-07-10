@@ -456,14 +456,14 @@ class TwoLayerTransformer(nn.Module):
 
 
 class TFAugmentedFrozenLakeEnv(gym.Env):
-    def __init__(self, n_thought_acts=3, n_thought_states=10, d_model=128, max_steps=50, tabular=False, thought_per_state=False):
+    def __init__(self, n_thought_acts=3, n_thought_states=10, d_model=128, max_steps=50, tabular=False, thought_per_state=False, desc=None):
         super(TFAugmentedFrozenLakeEnv, self).__init__()
         self.tabular = tabular
         self.d_model = d_model
         self.base_env = gym.make(
             'FrozenLake-v1',
             # desc=["SFFF", "HHFH", "FFFH", "HFFG"],
-            desc=None,
+            desc=desc,
             map_name="4x4",
             is_slippery=False,
             success_rate=1.0/3.0,

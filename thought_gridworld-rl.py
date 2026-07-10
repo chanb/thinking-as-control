@@ -25,6 +25,16 @@ from envs import (
 from policies import ThoughtMLP, init_weights
 
 
+MAPS = {
+    "default": None,
+    "hard": [
+        "SFFF",
+        "FHFH",
+        "HHFH",
+        "GFFH"
+    ]
+}
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Run a pretrained PyTorch model with specified options."
@@ -75,6 +85,13 @@ def parse_args():
         "--thought_per_state",
         action="store_true",
         help="Whether or not to initialize a random thought per env state",
+    )
+
+    parser.add_argument(
+        "--desc",
+        type=str,
+        default="default",
+        help="The map to use",
     )
 
     parser.add_argument(
@@ -552,6 +569,7 @@ if __name__ == "__main__":
     num_iterations = args.num_iterations
     ent_coef = args.ent_coef
     thought_per_state = args.thought_per_state
+    desc = MAPS[args.desc]
 
     pickle.dump(
         args,
@@ -575,6 +593,7 @@ if __name__ == "__main__":
             max_steps=max_steps,
             tabular=tabular,
             thought_per_state=thought_per_state,
+            desc=desc,
         )
 
     if save_path is not None:
