@@ -510,7 +510,7 @@ class TFAugmentedFrozenLakeEnv(gym.Env):
 
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=self.d_model,
-            nhead=2,
+            nhead=2 if self.d_model % 2 == 0 else 1,
             dropout=0.0,
             dim_feedforward=self.d_model * 4,
             batch_first=True,
@@ -555,7 +555,10 @@ class TFAugmentedFrozenLakeEnv(gym.Env):
         if action < self.n_acts + 1:  # Environment action
             if action > 0:
                 self.env_obs, reward, terminated, truncated, _ = self.base_env.step(action - 1)
-            self.thought = self.initial_thought[self.env_obs].detach()
+            if self.thought_per_state:
+                self.thought = self.initial_thought[self.env_obs].detach()
+            else:
+                self.thought = self.initial_thought.detach()
             self.prev_thought_act = 0
             self.prev_thought = self.thought.detach()
             obs = self._get_obs()
