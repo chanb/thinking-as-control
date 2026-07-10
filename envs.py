@@ -555,7 +555,7 @@ class TFAugmentedFrozenLakeEnv(gym.Env):
         if action < self.n_acts + 1:  # Environment action
             if action > 0:
                 self.env_obs, reward, terminated, truncated, _ = self.base_env.step(action - 1)
-            self.thought = self.initial_thought.detach()
+            self.thought = self.initial_thought[self.env_obs].detach()
             self.prev_thought_act = 0
             self.prev_thought = self.thought.detach()
             obs = self._get_obs()
