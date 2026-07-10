@@ -72,6 +72,12 @@ def parse_args():
     )
 
     parser.add_argument(
+        "--thought_per_state",
+        action="store_true",
+        help="Whether or not to initialize a random thought per env state",
+    )
+
+    parser.add_argument(
         "--max_steps",
         type=int,
         default=30,
@@ -545,6 +551,7 @@ if __name__ == "__main__":
     max_steps = args.max_steps
     num_iterations = args.num_iterations
     ent_coef = args.ent_coef
+    thought_per_state = args.thought_per_state
 
     pickle.dump(
         args,
@@ -564,6 +571,7 @@ if __name__ == "__main__":
         d_model=d_model,
         max_steps=max_steps,
         tabular=tabular,
+        thought_per_state=thought_per_state,
     )
 
     agent = train_rl(

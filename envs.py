@@ -456,7 +456,7 @@ class TwoLayerTransformer(nn.Module):
 
 
 class TFAugmentedFrozenLakeEnv(gym.Env):
-    def __init__(self, n_thought_acts=3, n_thought_states=10, d_model=128, max_steps=50, tabular=False):
+    def __init__(self, n_thought_acts=3, n_thought_states=10, d_model=128, max_steps=50, tabular=False, thought_per_state=False):
         super(TFAugmentedFrozenLakeEnv, self).__init__()
         self.tabular = tabular
         self.d_model = d_model
@@ -470,6 +470,7 @@ class TFAugmentedFrozenLakeEnv(gym.Env):
             reward_schedule=(1, 0, 0),
             max_episode_steps=-1,
         )
+        self.thought_per_state = thought_per_state
 
         self.max_steps = max_steps
         self.observation_space = gym.spaces.Dict(
@@ -487,7 +488,10 @@ class TFAugmentedFrozenLakeEnv(gym.Env):
         self.n_thought_acts = n_thought_acts
         self.action_space = gym.spaces.Discrete(self.base_env.action_space.n + n_thought_acts)
 
-        self.initial_thought = torch.randn(self.d_model)
+        if self.thought_per_state:
+            self.initial_thought = torch.randn((16, self.d_model))
+        else:
+            self.initial_thought = torch.randn(self.d_model)
         # self.initial_thought = self.initial_thought / torch.norm(self.initial_thought, p=2)
 
         # Thought space
@@ -527,7 +531,10 @@ class TFAugmentedFrozenLakeEnv(gym.Env):
     def reset(self, seed: int):
         self.steps = 0
         self.env_obs, _ = self.base_env.reset(seed=seed)
-        self.thought = self.initial_thought.detach()
+        if self.thought_per_state:
+            self.thought = self.initial_thought[self.env_obs].detach()
+        else:
+            self.thought = self.initial_thought.detach()
         self.prev_thought = self.thought.detach()
         self.prev_thought_act = 0
         obs = self._get_obs()
