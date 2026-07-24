@@ -452,47 +452,88 @@ def train_rl(
         toc = timeit.default_timer()
         update_time = toc - tic
 
-        headers = [
-            "Itr",
-            "Roll(s)",
-            "Ret μ",
-            # "Ret min",
-            # "Ret max",
-            "Reach",
-            "Hole",
-            "Len μ",
-            "Len min",
-            "Len max",
-            "Think",
-            "Update(s)",
-            "Pred. V",
-            "Adv",
-            "Ent",
-            "Pi Loss",
-            "Reverse KL",
-            "V Loss",
-        ]
 
-        table = [[
-            itr,
-            f"{rollout_time:.2f}",
-            f"{ep_rewards.mean():.3f}",
-            # f"{ep_rewards.min():.3f}",
-            # f"{ep_rewards.max():.3f}",
-            f"{reach_count / num_episodes:.4f}",
-            f"{hole_count / num_episodes:.4f}",
-            f"{ep_lens.mean():.1f}",
-            f"{ep_lens.min()}",
-            f"{ep_lens.max()}",
-            f"{frac_thinking_actions[itr]:.4f}",
-            f"{update_time:.2f}",
-            f"{value_mean:.4f}",
-            f"{adv_mean:.4f}",
-            f"{ent_mean:.4f}",
-            f"{surr_mean:.4f}",
-            f"{reverse_kl_mean:.4f}",
-            f"{mse_mean:.4f}",
-        ]]
+        if isinstance(env, TFAugmentedFrozenLakeEnv):
+            headers = [
+                "Itr",
+                "Roll(s)",
+                "Ret μ",
+                # "Ret min",
+                # "Ret max",
+                "Reach",
+                "Hole",
+                "Len μ",
+                "Len min",
+                "Len max",
+                "Think",
+                "Update(s)",
+                "Pred. V",
+                "Adv",
+                "Ent",
+                "Pi Loss",
+                "Reverse KL",
+                "V Loss",
+            ]
+
+            table = [[
+                itr,
+                f"{rollout_time:.2f}",
+                f"{ep_rewards.mean():.3f}",
+                # f"{ep_rewards.min():.3f}",
+                # f"{ep_rewards.max():.3f}",
+                f"{reach_count / num_episodes:.4f}",
+                f"{hole_count / num_episodes:.4f}",
+                f"{ep_lens.mean():.1f}",
+                f"{ep_lens.min()}",
+                f"{ep_lens.max()}",
+                f"{frac_thinking_actions[itr]:.4f}",
+                f"{update_time:.2f}",
+                f"{value_mean:.4f}",
+                f"{adv_mean:.4f}",
+                f"{ent_mean:.4f}",
+                f"{surr_mean:.4f}",
+                f"{reverse_kl_mean:.4f}",
+                f"{mse_mean:.4f}",
+            ]]
+        else:
+            headers = [
+                "Itr",
+                "Roll(s)",
+                "Ret μ",
+                "Ret min",
+                "Ret max",
+                "Len μ",
+                "Len min",
+                "Len max",
+                "Think",
+                "Update(s)",
+                "Pred. V",
+                "Adv",
+                "Ent",
+                "Pi Loss",
+                "Reverse KL",
+                "V Loss",
+            ]
+
+            table = [[
+                itr,
+                f"{rollout_time:.2f}",
+                f"{ep_rewards.mean():.3f}",
+                f"{ep_rewards.min():.3f}",
+                f"{ep_rewards.max():.3f}",
+                f"{ep_lens.mean():.1f}",
+                f"{ep_lens.min()}",
+                f"{ep_lens.max()}",
+                f"{frac_thinking_actions[itr]:.4f}",
+                f"{update_time:.2f}",
+                f"{value_mean:.4f}",
+                f"{adv_mean:.4f}",
+                f"{ent_mean:.4f}",
+                f"{surr_mean:.4f}",
+                f"{reverse_kl_mean:.4f}",
+                f"{mse_mean:.4f}",
+            ]]
+
 
         logging.info(
             "\n" + tabulate(table, headers=headers, tablefmt="simple")
