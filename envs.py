@@ -281,7 +281,7 @@ class TFAugmentedALEEnv(gym.Env):
     def reset(self, seed: int):
         self.steps = 0
         self.env_obs, _ = self.base_env.reset(seed=seed)
-        self.env_obs = torch.tensor(self.env_obs, dtype=torch.float32)
+        self.env_obs = torch.tensor(self.env_obs, dtype=torch.float32) / 255.0
         if self.thought_per_state:
             self.thought = self.initial_thought(self.env_obs).detach()
         else:
@@ -306,7 +306,7 @@ class TFAugmentedALEEnv(gym.Env):
         if action < self.n_acts + 1:  # Environment action
             if action > 0:
                 self.env_obs, reward, terminated, truncated, _ = self.base_env.step(action - 1)
-                self.env_obs = torch.tensor(self.env_obs, dtype=torch.float32)
+                self.env_obs = torch.tensor(self.env_obs, dtype=torch.float32) / 255.0
             if self.thought_per_state:
                 self.thought = self.initial_thought(self.env_obs).detach()
             else:
