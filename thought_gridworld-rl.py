@@ -344,7 +344,7 @@ def train_rl(
             # assert torch.all(returns >= 0.0)
             episodes.append((sseq, aseq, returns, advs, log_prob_seq))
             # assert episode < 2
-        frac_thinking_actions[itr] = action_counts[5:].sum() / action_counts.sum()
+        frac_thinking_actions[itr] = action_counts[1 + env.n_acts:].sum() / action_counts.sum()
         rewards[itr] = np.mean(ep_rewards)
         toc = timeit.default_timer()
         rollout_time = toc - tic
@@ -585,7 +585,7 @@ def evaluate_agent(env, agent, seed):
             next_obs, reward, terminated, truncated, _ = env.step(action.item())
             done = terminated or truncated
 
-            if action > 0 and action < 5:
+            if action > 0 and action < env.n_acts:
                 total_act_steps += 1
 
             total_reward += reward
