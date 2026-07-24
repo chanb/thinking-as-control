@@ -1,4 +1,5 @@
 """Environments used for proof-of-concept thinking experiments."""
+import ale_py
 import gymnasium as gym
 import logging
 import numpy as np
@@ -6,6 +7,8 @@ import torch
 import torch.nn as nn
 
 from policies import init_weights
+
+gym.register_envs(ale_py)
 
 
 class CachedEncoderLayer(nn.Module):
@@ -86,6 +89,254 @@ class TwoLayerTransformer(nn.Module):
         return x, new_caches
 
 
+class TFAugmentedFrozenLakeEnv(gym.Env):
+    def __init__(self, n_thought_acts=3, n_thought_states=10, d_model=128, max_steps=50, tabular=False, thought_per_state=False, desc=None):
+        super(TFAugmentedFrozenLakeEnv, self).__init__()
+        self.tabular = tabular
+        self.d_model = d_model
+        self.base_env = gym.make(
+            'FrozenLake-v1',
+            # desc=["SFFF", "HHFH", "FFFH", "HFFG"],
+            desc=desc,
+            map_name="4x4",
+            is_slippery=False,
+            success_rate=1.0/3.0,
+            reward_schedule=(1, 0, 0),
+            max_episode_steps=-1,
+        )
+        self.thought_per_state = thought_per_state
+
+        self.max_steps = max_steps
+        self.observation_space = gym.spaces.Dict(
+            {
+                "env": gym.spaces.Box(low=0, high=1, shape=(16,), dtype=int) if tabular else self.base_env.observation_space,
+                "thought": gym.spaces.Box(
+                    low=-np.inf, high=np.inf, shape=(self.d_model,), dtype=np.float32
+                ),
+            }
+        )
+        self.obs_dim = self.base_env.observation_space.n if tabular else 1
+        self.n_states = self.base_env.observation_space.n
+        self.n_acts = self.base_env.action_space.n
+        self.n_thought_states = n_thought_states
+        self.n_thought_acts = n_thought_acts
+        self.action_space = gym.spaces.Discrete(self.base_env.action_space.n + n_thought_acts)
+
+        if self.thought_per_state:
+            self.initial_thought = torch.randn((16, self.d_model))
+        else:
+            self.initial_thought = torch.randn(self.d_model)
+        # self.initial_thought = self.initial_thought / torch.norm(self.initial_thought, p=2)
+
+        # Thought space
+        self.pos_embedding = nn.Embedding(self.n_states, self.d_model)
+        # self.pos_embedding.weight.data = (
+        #     self.pos_embedding.weight.data
+        #     / torch.norm(self.pos_embedding.weight.data, p=2, dim=-1, keepdim=True)
+        # )
+        self.action_embedding = nn.Embedding(self.n_acts + self.n_thought_acts + 1, self.d_model, padding_idx=0)
+        # self.action_embedding.weight.data = (
+        #     self.action_embedding.weight.data
+        #     / torch.norm(self.action_embedding.weight.data, p=2, dim=-1, keepdim=True)
+        # )
+        self.lnorm = nn.LayerNorm(d_model)
+        self.lnorm.apply(init_weights)
+
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=self.d_model,
+            nhead=2 if self.d_model % 2 == 0 else 1,
+            dropout=0.0,
+            dim_feedforward=self.d_model * 4,
+            batch_first=True,
+        )
+        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=2, enable_nested_tensor=False)
+        self.transformer.apply(init_weights)
+        self.transformer.eval()
+
+        for module in [
+            self.pos_embedding,
+            self.action_embedding,
+            self.lnorm,
+            self.transformer,
+        ]:
+            for param in module.parameters():
+                param.requires_grad = False
+
+    def reset(self, seed: int):
+        self.steps = 0
+        self.env_obs, _ = self.base_env.reset(seed=seed)
+        if self.thought_per_state:
+            self.thought = self.initial_thought[self.env_obs].detach()
+        else:
+            self.thought = self.initial_thought.detach()
+        self.prev_thought = self.thought.detach()
+        self.prev_thought_act = 0
+        obs = self._get_obs()
+        return obs, {}
+
+    def _get_obs(self):
+        return {
+            "env": np.eye(16)[self.env_obs] if self.tabular else [self.env_obs],
+            "thought": self.thought.clone(),
+        }
+
+    def step(self, action):
+        self.steps += 1
+
+        truncated = False
+        terminated = False
+        reward = 0.0
+        if action < self.n_acts + 1:  # Environment action
+            if action > 0:
+                self.env_obs, reward, terminated, truncated, _ = self.base_env.step(action - 1)
+            if self.thought_per_state:
+                self.thought = self.initial_thought[self.env_obs].detach()
+            else:
+                self.thought = self.initial_thought.detach()
+            self.prev_thought_act = 0
+            self.prev_thought = self.thought.detach()
+            obs = self._get_obs()
+        else: # Thought action
+            with torch.inference_mode():
+                self.thought = self.transformer(
+                    torch.cat((
+                        self.pos_embedding(torch.tensor(self.env_obs))[None, None],
+                        self.action_embedding(torch.tensor(action))[None, None],
+                        self.thought[None, None],
+                    ), dim=1)
+                )[:, -1]
+                self.thought = self.lnorm(self.thought)[0]
+                # next_thought = self.thought / torch.norm(self.thought, p=2, dim=-1, keepdim=True)
+                # self.thought = next_thought[0]
+
+                # if self.prev_thought_act == action and torch.all(self.prev_thought == self.thought):
+                #     reward = -1.0
+
+                self.prev_thought_act = action
+                self.prev_thought = self.thought.detach()
+            obs = self._get_obs()
+
+        if self.steps >= self.max_steps:
+            truncated = True
+
+        return obs, reward, terminated, truncated, {}
+
+
+class TFAugmentedALEEnv(gym.Env):
+    def __init__(self, n_thought_acts=3, n_thought_states=10, d_model=128, max_steps=50, thought_per_state=False):
+        super(TFAugmentedALEEnv, self).__init__()
+        self.d_model = d_model
+        self.base_env = gym.make(
+            "ALE/Pacman-v5",
+            obs_type="ram",
+        )
+        self.thought_per_state = thought_per_state
+
+        self.max_steps = max_steps
+        self.observation_space = gym.spaces.Dict(
+            {
+                "env": self.base_env.observation_space,
+                "thought": gym.spaces.Box(
+                    low=-np.inf, high=np.inf, shape=(self.d_model,), dtype=np.float32
+                ),
+            }
+        )
+        self.obs_dim = self.base_env.observation_space.shape[0]
+        self.n_acts = self.base_env.action_space.n
+        self.n_thought_states = n_thought_states
+        self.n_thought_acts = n_thought_acts
+        self.action_space = gym.spaces.Discrete(self.base_env.action_space.n + n_thought_acts)
+
+        if self.thought_per_state:
+            self.initial_thought = nn.Linear(self.obs_dim, self.d_model)
+        else:
+            self.initial_thought = torch.randn(self.d_model)
+
+        # Thought space
+        self.state_embedding = nn.Linear(self.obs_dim, self.d_model)
+        self.action_embedding = nn.Embedding(self.n_acts + self.n_thought_acts + 1, self.d_model, padding_idx=0)
+        self.lnorm = nn.LayerNorm(d_model)
+        self.lnorm.apply(init_weights)
+
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=self.d_model,
+            nhead=2 if self.d_model % 2 == 0 else 1,
+            dropout=0.0,
+            dim_feedforward=self.d_model * 4,
+            batch_first=True,
+        )
+        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=2, enable_nested_tensor=False)
+        self.transformer.apply(init_weights)
+        self.transformer.eval()
+
+        for module in [
+            self.state_embedding,
+            self.action_embedding,
+            self.lnorm,
+            self.transformer,
+        ]:
+            for param in module.parameters():
+                param.requires_grad = False
+
+    def reset(self, seed: int):
+        self.steps = 0
+        self.env_obs, _ = self.base_env.reset(seed=seed)
+        self.env_obs = torch.tensor(self.env_obs, dtype=torch.float32)
+        if self.thought_per_state:
+            self.thought = self.initial_thought(self.env_obs).detach()
+        else:
+            self.thought = self.initial_thought.detach()
+        self.prev_thought = self.thought.detach()
+        self.prev_thought_act = 0
+        obs = self._get_obs()
+        return obs, {}
+
+    def _get_obs(self):
+        return {
+            "env": self.env_obs,
+            "thought": self.thought.clone(),
+        }
+
+    def step(self, action):
+        self.steps += 1
+
+        truncated = False
+        terminated = False
+        reward = 0.0
+        if action < self.n_acts + 1:  # Environment action
+            if action > 0:
+                self.env_obs, reward, terminated, truncated, _ = self.base_env.step(action - 1)
+                self.env_obs = torch.tensor(self.env_obs, dtype=torch.float32)
+            if self.thought_per_state:
+                self.thought = self.initial_thought(self.env_obs).detach()
+            else:
+                self.thought = self.initial_thought.detach()
+            self.prev_thought_act = 0
+            self.prev_thought = self.thought.detach()
+            obs = self._get_obs()
+        else: # Thought action
+            with torch.inference_mode():
+                self.thought = self.transformer(
+                    torch.cat((
+                        self.state_embedding(torch.tensor(self.env_obs))[None, None],
+                        self.action_embedding(torch.tensor(action))[None, None],
+                        self.thought[None, None],
+                    ), dim=1)
+                )[:, -1]
+                self.thought = self.lnorm(self.thought)[0]
+
+                self.prev_thought_act = action
+                self.prev_thought = self.thought.detach()
+            obs = self._get_obs()
+
+        if self.steps >= self.max_steps:
+            truncated = True
+
+        return obs, reward, terminated, truncated, {}
+
+
+
+"""
 # class TFAugmentedFrozenLakeEnv(gym.Env):
 #     def __init__(self, n_thought_acts=3, n_thought_states=10, d_model=128, max_steps=50, tabular=False):
 #         super(TFAugmentedFrozenLakeEnv, self).__init__()
@@ -454,140 +705,6 @@ class TwoLayerTransformer(nn.Module):
 
 #         return obs, reward, terminated, truncated, {}
 
-
-class TFAugmentedFrozenLakeEnv(gym.Env):
-    def __init__(self, n_thought_acts=3, n_thought_states=10, d_model=128, max_steps=50, tabular=False, thought_per_state=False, desc=None):
-        super(TFAugmentedFrozenLakeEnv, self).__init__()
-        self.tabular = tabular
-        self.d_model = d_model
-        self.base_env = gym.make(
-            'FrozenLake-v1',
-            # desc=["SFFF", "HHFH", "FFFH", "HFFG"],
-            desc=desc,
-            map_name="4x4",
-            is_slippery=False,
-            success_rate=1.0/3.0,
-            reward_schedule=(1, 0, 0),
-            max_episode_steps=-1,
-        )
-        self.thought_per_state = thought_per_state
-
-        self.max_steps = max_steps
-        self.observation_space = gym.spaces.Dict(
-            {
-                "env": gym.spaces.Box(low=0, high=1, shape=(16,), dtype=int) if tabular else self.base_env.observation_space,
-                "thought": gym.spaces.Box(
-                    low=-np.inf, high=np.inf, shape=(self.d_model,), dtype=np.float32
-                ),
-            }
-        )
-        self.obs_dim = self.base_env.observation_space.n if tabular else 1
-        self.n_states = self.base_env.observation_space.n
-        self.n_acts = self.base_env.action_space.n
-        self.n_thought_states = n_thought_states
-        self.n_thought_acts = n_thought_acts
-        self.action_space = gym.spaces.Discrete(self.base_env.action_space.n + n_thought_acts)
-
-        if self.thought_per_state:
-            self.initial_thought = torch.randn((16, self.d_model))
-        else:
-            self.initial_thought = torch.randn(self.d_model)
-        # self.initial_thought = self.initial_thought / torch.norm(self.initial_thought, p=2)
-
-        # Thought space
-        self.pos_embedding = nn.Embedding(self.n_states, self.d_model)
-        # self.pos_embedding.weight.data = (
-        #     self.pos_embedding.weight.data
-        #     / torch.norm(self.pos_embedding.weight.data, p=2, dim=-1, keepdim=True)
-        # )
-        self.action_embedding = nn.Embedding(self.n_acts + self.n_thought_acts + 1, self.d_model, padding_idx=0)
-        # self.action_embedding.weight.data = (
-        #     self.action_embedding.weight.data
-        #     / torch.norm(self.action_embedding.weight.data, p=2, dim=-1, keepdim=True)
-        # )
-        self.lnorm = nn.LayerNorm(d_model)
-        self.lnorm.apply(init_weights)
-
-        encoder_layer = nn.TransformerEncoderLayer(
-            d_model=self.d_model,
-            nhead=2 if self.d_model % 2 == 0 else 1,
-            dropout=0.0,
-            dim_feedforward=self.d_model * 4,
-            batch_first=True,
-        )
-        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=2, enable_nested_tensor=False)
-        self.transformer.apply(init_weights)
-        self.transformer.eval()
-
-        for module in [
-            self.pos_embedding,
-            self.action_embedding,
-            self.lnorm,
-            self.transformer,
-        ]:
-            for param in module.parameters():
-                param.requires_grad = False
-
-    def reset(self, seed: int):
-        self.steps = 0
-        self.env_obs, _ = self.base_env.reset(seed=seed)
-        if self.thought_per_state:
-            self.thought = self.initial_thought[self.env_obs].detach()
-        else:
-            self.thought = self.initial_thought.detach()
-        self.prev_thought = self.thought.detach()
-        self.prev_thought_act = 0
-        obs = self._get_obs()
-        return obs, {}
-
-    def _get_obs(self):
-        return {
-            "env": np.eye(16)[self.env_obs] if self.tabular else [self.env_obs],
-            "thought": self.thought.clone(),
-        }
-
-    def step(self, action):
-        self.steps += 1
-
-        truncated = False
-        terminated = False
-        reward = 0.0
-        if action < self.n_acts + 1:  # Environment action
-            if action > 0:
-                self.env_obs, reward, terminated, truncated, _ = self.base_env.step(action - 1)
-            if self.thought_per_state:
-                self.thought = self.initial_thought[self.env_obs].detach()
-            else:
-                self.thought = self.initial_thought.detach()
-            self.prev_thought_act = 0
-            self.prev_thought = self.thought.detach()
-            obs = self._get_obs()
-        else: # Thought action
-            with torch.inference_mode():
-                self.thought = self.transformer(
-                    torch.cat((
-                        self.pos_embedding(torch.tensor(self.env_obs))[None, None],
-                        self.action_embedding(torch.tensor(action))[None, None],
-                        self.thought[None, None],
-                    ), dim=1)
-                )[:, -1]
-                self.thought = self.lnorm(self.thought)[0]
-                # next_thought = self.thought / torch.norm(self.thought, p=2, dim=-1, keepdim=True)
-                # self.thought = next_thought[0]
-
-                # if self.prev_thought_act == action and torch.all(self.prev_thought == self.thought):
-                #     reward = -1.0
-
-                self.prev_thought_act = action
-                self.prev_thought = self.thought.detach()
-            obs = self._get_obs()
-
-        if self.steps >= self.max_steps:
-            truncated = True
-
-        return obs, reward, terminated, truncated, {}
-
-
 # class TFAugmentedFrozenLakeEnv(gym.Env):
 #     def __init__(self, n_thought_acts=3, n_thought_states=10, d_model=128, max_steps=50, tabular=False):
 #         super(TFAugmentedFrozenLakeEnv, self).__init__()
@@ -710,3 +827,4 @@ class TFAugmentedFrozenLakeEnv(gym.Env):
 #             truncated = True
 
 #         return obs, reward, terminated, truncated, {}
+"""

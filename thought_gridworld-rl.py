@@ -20,7 +20,8 @@ from data_utils import (
     compute_returns_and_advantages
 )
 from envs import (
-    TFAugmentedFrozenLakeEnv
+    TFAugmentedFrozenLakeEnv,
+    TFAugmentedALEEnv,
 )
 from policies import ThoughtMLP, init_weights
 
@@ -29,9 +30,9 @@ MAPS = {
     "default": None,
     "hard": [
         "SFFF",
-        "FHFH",
-        "HHFH",
-        "GFFH"
+        "FHFF",
+        "HGHF",
+        "FFFF"
     ]
 }
 
@@ -85,6 +86,13 @@ def parse_args():
         "--thought_per_state",
         action="store_true",
         help="Whether or not to initialize a random thought per env state",
+    )
+
+    parser.add_argument(
+        "--domain",
+        type=str,
+        choices=["pacman", "frozenlake"],
+        help="The environment domain",
     )
 
     parser.add_argument(
@@ -569,6 +577,7 @@ if __name__ == "__main__":
     num_iterations = args.num_iterations
     ent_coef = args.ent_coef
     thought_per_state = args.thought_per_state
+    domain = args.domain
     desc = MAPS[args.desc]
 
     pickle.dump(
@@ -586,15 +595,26 @@ if __name__ == "__main__":
     if model_path is not None:
         env = pickle.load(open("{}-env.pkl".format(model_path), "rb"))
     else:
-        env = TFAugmentedFrozenLakeEnv(
-            n_thought_states=n_thought_states,
-            n_thought_acts=n_thought_acts,
-            d_model=d_model,
-            max_steps=max_steps,
-            tabular=tabular,
-            thought_per_state=thought_per_state,
-            desc=desc,
-        )
+        if domain == "frozenlake":
+            env = TFAugmentedFrozenLakeEnv(
+                n_thought_states=n_thought_states,
+                n_thought_acts=n_thought_acts,
+                d_model=d_model,
+                max_steps=max_steps,
+                tabular=tabular,
+                thought_per_state=thought_per_state,
+                desc=desc,
+            )
+        elif domain == "pacman":
+            env = TFAugmentedALEEnv(
+                n_thought_states=n_thought_states,
+                n_thought_acts=n_thought_acts,
+                d_model=d_model,
+                max_steps=max_steps,
+                thought_per_state=thought_per_state,
+            )
+        else:
+            raise NotImplementedError
 
     if save_path is not None:
         pickle.dump(env, open("{}-env.pkl".format(save_path), "wb"))
